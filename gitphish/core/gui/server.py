@@ -21,6 +21,7 @@ from gitphish.core.gui.api.deployment_api import DeploymentAPI
 from gitphish.core.gui.api.server_control_api import (
     ServerControlAPI,
 )
+from gitphish.core.gui.api.sms_campaigns_api import SMSCampaignsAPI
 
 
 class GitPhishGuiServer:
@@ -61,6 +62,11 @@ class GitPhishGuiServer:
             self.github_account_service,
         )
         self.server_control_api = ServerControlAPI(self.app)
+        self.sms_campaigns_api = SMSCampaignsAPI(
+            self.app,
+            self.github_account_service,
+            self.compromised_account_service
+        )
 
         # Configure logging
         logging.basicConfig(level=logging.INFO)
@@ -91,6 +97,11 @@ class GitPhishGuiServer:
             """Authentication server management page."""
             server_status = self.server_control_api.get_server_status()
             return render_template("auth_server.html", server_status=server_status)
+
+        @self.app.route("/sms-campaigns")
+        def sms_campaigns():
+            """SMS campaigns management page."""
+            return render_template("sms_campaigns.html")
 
         # Legacy routes - keeping for backward compatibility
         @self.app.route("/server-control")
