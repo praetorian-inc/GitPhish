@@ -34,3 +34,10 @@ gitphish = "gitphish.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["gitphish*"]
+
+[tool.setuptools.package-data]
+gitphish = [
+    "core/gui/templates/*.html",
+    "static/landing_page/*.html",
+    "core/deployment/types/github_pages/templates/*.html"
+]
