@@ -9,7 +9,7 @@ from gitphish.core.cli.gui import setup_gui_subparser
 from gitphish.core.cli.deploy import setup_deploy_subparser
 from gitphish.core.cli.manual import setup_manual_subparser
 from gitphish.core.cli.postex import setup_postex_subparser
-from gitphish.core.cli.sms_campaigns import setup_sms_campaigns_subparser, handle_sms_campaigns_command
+from gitphish.core.cli.sms_campaigns import setup_sms_campaigns_subparser
 
 GITPHISH_VERSION = "0.2.0"
 

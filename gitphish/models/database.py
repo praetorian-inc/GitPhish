@@ -81,6 +81,9 @@ class DatabaseManager:
             from gitphish.models.github.compromised_account import (
                 CompromisedGitHubAccount,  # noqa: F401
             )
+            from gitphish.models.sms.campaign import (
+                SMSCampaign,  # noqa: F401
+            )
 
             # Check if tables already exist by inspecting one of them
             inspector = inspect(self.engine)
