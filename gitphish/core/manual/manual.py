@@ -14,7 +14,7 @@ class ManualDeviceAuth:
 
     def run_manual_device_code_flow(
         self, client_id: str, org_name: str, email: str = None, skip_wait: bool = False
-    ) -> bool:
+    ) -> dict:
         print("\n🎯 Starting Manual GitHub Device Code Authentication")
         print("=" * 50)
         print(f"Client ID: {client_id}")
@@ -51,7 +51,7 @@ class ManualDeviceAuth:
             if skip_wait:
                 print("\n⏭️  Skipping token polling as requested (--skip-wait)")
                 print(f"   Device code: {device_flow['device_code']}")
-                return True
+                return device_flow
 
             print("\n🔄 Step 3: Polling for access token (starting immediately)...")
             access_token = self.auth_client.poll_for_token(
@@ -62,14 +62,15 @@ class ManualDeviceAuth:
                 print("\n🎉 SUCCESS! Authentication completed!")
                 print(f"   Access token: {access_token[:20]}...")
                 self.save_access_token(access_token, email)
-                return True
+                device_flow["access_token"] = access_token
+                return device_flow
             else:
                 print("\n❌ Authentication failed or timed out")
-                return False
+                return {"error": "Authentication failed or timed out"}
 
         except Exception as e:
             print(f"\n❌ Error during authentication: {str(e)}")
-            return False
+            return {"error": str(e)}
         finally:
             if self.auth_client:
                 self.auth_client.close()

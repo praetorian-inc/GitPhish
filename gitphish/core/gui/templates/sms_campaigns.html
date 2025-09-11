@@ -571,7 +571,7 @@ function testTwilioConfig() {
         token: document.getElementById('twilioToken').value
     };
     
-    fetch('/api/sms-campaigns/test-twilio', {
+    fetch('/api/sms/test-twilio', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(data)
@@ -597,7 +597,7 @@ function testAwsConfig() {
         region: document.getElementById('awsRegion').value
     };
     
-    fetch('/api/sms-campaigns/test-aws', {
+    fetch('/api/sms/test-aws', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(data)
@@ -654,16 +654,22 @@ function startCampaign() {
         debug: document.getElementById('debugMode').checked
     };
     
-    // Add provider-specific data
-    if (formData.provider === 'twilio') {
-        formData.twilioSid = document.getElementById('twilioSid').value;
-        formData.twilioToken = document.getElementById('twilioToken').value;
-        formData.fromPhone = document.getElementById('fromPhone').value;
-    } else if (formData.provider === 'aws') {
-        formData.awsAccessKeyId = document.getElementById('awsAccessKeyId').value;
-        formData.awsSecretAccessKey = document.getElementById('awsSecretAccessKey').value;
-        formData.awsSessionToken = document.getElementById('awsSessionToken').value;
-        formData.awsRegion = document.getElementById('awsRegion').value;
+    // Handle CSV file upload for batch campaigns
+    if (formData.targetMethod === 'file') {
+        const fileInput = document.getElementById('targetFile');
+        if (fileInput.files.length === 0) {
+            alert('❌ Please select a CSV file');
+            return;
+        }
+        
+        const file = fileInput.files[0];
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            formData.csvData = e.target.result;
+            submitCampaign(formData);
+        };
+        reader.readAsText(file);
+        return;
     }
     
     // Validate required fields
@@ -677,6 +683,23 @@ function startCampaign() {
         return;
     }
     
+    // For single campaigns, submit directly
+    submitCampaign(formData);
+}
+
+function submitCampaign(formData) {
+    // Add provider-specific data
+    if (formData.provider === 'twilio') {
+        formData.twilioSid = document.getElementById('twilioSid').value;
+        formData.twilioToken = document.getElementById('twilioToken').value;
+        formData.fromPhone = document.getElementById('fromPhone').value;
+    } else if (formData.provider === 'aws') {
+        formData.awsAccessKeyId = document.getElementById('awsAccessKeyId').value;
+        formData.awsSecretAccessKey = document.getElementById('awsSecretAccessKey').value;
+        formData.awsSessionToken = document.getElementById('awsSessionToken').value;
+        formData.awsRegion = document.getElementById('awsRegion').value;
+    }
+    
     fetch('/api/sms-campaigns/start', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -685,7 +708,11 @@ function startCampaign() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('✅ Campaign started successfully!');
+            let message = '✅ Campaign started successfully!';
+            if (data.individual_count) {
+                message += ` Running ${data.individual_count} parallel campaigns.`;
+            }
+            alert(message);
             bootstrap.Modal.getInstance(document.getElementById('campaignModal')).hide();
             refreshCampaigns();
         } else {
@@ -848,32 +875,45 @@ function getStatusBadgeClass(status) {
     }
 }
 
+function showUploadModal() {
+    alert('📝 Upload a CSV file with the format:\nemail,phone\nuser1@example.com,+1234567890\nuser2@example.com,+0987654321');
+}
+
 function refreshCampaigns() {
     fetch('/api/sms-campaigns/list')
     .then(response => response.json())
     .then(data => {
         const tbody = document.getElementById('campaignsTableBody');
         if (data.campaigns && data.campaigns.length > 0) {
-            tbody.innerHTML = data.campaigns.map(campaign => `
-                <tr>
-                    <td>${campaign.id}</td>
-                    <td>${campaign.platform}</td>
-                    <td>${campaign.provider}</td>
-                    <td>${campaign.target_count}</td>
-                    <td><span class="badge bg-${getStatusBadgeClass(campaign.status)}">${campaign.status}</span></td>
-                    <td>${new Date(campaign.started).toLocaleString()}</td>
-                    <td>
-                        <button class="btn btn-sm btn-outline-info" onclick="viewCampaign('${campaign.id}')">
-                            <i class="fas fa-eye"></i> View
-                        </button>
-                        ${campaign.status === 'running' ? `
-                            <button class="btn btn-sm btn-outline-danger" onclick="stopCampaign('${campaign.id}')">
-                                <i class="fas fa-stop"></i>
+            tbody.innerHTML = data.campaigns.map(campaign => {
+                const campaignType = campaign.type === 'batch' ? '📋 Batch' : '👤 Single';
+                const displayId = campaign.type === 'batch' ? 
+                    campaign.id.replace('batch_', '') : campaign.id;
+                    
+                return `
+                    <tr>
+                        <td>
+                            <div>${displayId}</div>
+                            <small class="text-muted">${campaignType}</small>
+                        </td>
+                        <td>${campaign.platform}</td>
+                        <td>${campaign.provider}</td>
+                        <td>${campaign.target_count}</td>
+                        <td><span class="badge bg-${getStatusBadgeClass(campaign.status)}">${campaign.status}</span></td>
+                        <td>${new Date(campaign.started).toLocaleString()}</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-info" onclick="viewCampaign('${campaign.id}')">
+                                <i class="fas fa-eye"></i> View
                             </button>
-                        ` : ''}
-                    </td>
-                </tr>
-            `).join('');
+                            ${campaign.status.includes('running') ? `
+                                <button class="btn btn-sm btn-outline-danger" onclick="stopCampaign('${campaign.id}')">
+                                    <i class="fas fa-stop"></i>
+                                </button>
+                            ` : ''}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
         } else {
             tbody.innerHTML = `
                 <tr>
