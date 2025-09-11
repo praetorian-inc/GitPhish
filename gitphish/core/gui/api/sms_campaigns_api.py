@@ -9,14 +9,10 @@ import tempfile
 import os
 import glob
 import logging
-import csv
-import io
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 from flask import request, jsonify
-import boto3
-from twilio.rest import Client
-from botocore.exceptions import BotoCoreError, ClientError
+from gitphish.core.sms import SMSCampaignService
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +23,7 @@ class SMSCampaignsAPI:
         self.app = app
         self.github_account_service = github_account_service
         self.compromised_account_service = compromised_account_service
+        self.sms_service = SMSCampaignService()
         self.active_campaigns = {}  # In-memory storage for demo - use DB in production
         self._setup_routes()
 
@@ -273,20 +270,18 @@ class SMSCampaignsAPI:
             """Test Twilio configuration."""
             try:
                 data = request.get_json()
-                sid = data.get('sid')
-                token = data.get('token')
                 
-                if not sid or not token:
+                config = {
+                    'twilio_sid': data.get('sid'),
+                    'twilio_token': data.get('token'),
+                    'from_phone': data.get('from_phone', '+1234567890')  # Dummy value for test
+                }
+                
+                if not config['twilio_sid'] or not config['twilio_token']:
                     return jsonify({'success': False, 'error': 'SID and token are required'}), 400
                 
-                # Test Twilio connection
-                client = Client(sid, token)
-                account = client.api.accounts(sid).fetch()
-                
-                return jsonify({
-                    'success': True, 
-                    'message': f'Twilio connection successful. Account: {account.friendly_name}'
-                })
+                result = self.sms_service.test_provider_config('twilio', config)
+                return jsonify(result)
                 
             except Exception as e:
                 logger.error(f"Error testing Twilio: {str(e)}")
@@ -297,37 +292,20 @@ class SMSCampaignsAPI:
             """Test AWS SNS configuration."""
             try:
                 data = request.get_json()
-                access_key_id = data.get('accessKeyId')
-                secret_access_key = data.get('secretAccessKey')
-                session_token = data.get('sessionToken')
-                region = data.get('region', 'us-east-2')
                 
-                if not access_key_id or not secret_access_key:
-                    return jsonify({'success': False, 'error': 'Access Key ID and Secret Access Key are required'}), 400
-                
-                # Build client configuration
-                client_config = {
-                    'aws_access_key_id': access_key_id,
-                    'aws_secret_access_key': secret_access_key,
-                    'region_name': region
+                config = {
+                    'aws_access_key_id': data.get('accessKeyId'),
+                    'aws_secret_access_key': data.get('secretAccessKey'),
+                    'aws_session_token': data.get('sessionToken'),
+                    'aws_region': data.get('region', 'us-east-2')
                 }
                 
-                # Add session token if provided
-                if session_token and session_token.strip():
-                    client_config['aws_session_token'] = session_token
+                if not config['aws_access_key_id'] or not config['aws_secret_access_key']:
+                    return jsonify({'success': False, 'error': 'Access Key ID and Secret Access Key are required'}), 400
                 
-                # Test AWS SNS connection with provided credentials
-                sns_client = boto3.client('sns', **client_config)
-                response = sns_client.list_topics()
+                result = self.sms_service.test_provider_config('aws', config)
+                return jsonify(result)
                 
-                return jsonify({
-                    'success': True, 
-                    'message': f'AWS SNS connection successful. Region: {region}'
-                })
-                
-            except (BotoCoreError, ClientError) as e:
-                logger.error(f"Error testing AWS: {str(e)}")
-                return jsonify({'success': False, 'error': str(e)}), 500
             except Exception as e:
                 logger.error(f"Error testing AWS: {str(e)}")
                 return jsonify({'success': False, 'error': str(e)}), 500
@@ -451,38 +429,13 @@ class SMSCampaignsAPI:
             return False
 
     def _parse_csv_data(self, csv_data: str) -> List[Tuple[str, str]]:
-        """Parse CSV data and extract email,phone pairs."""
-        targets = []
+        """Parse CSV data using the SMS service."""
         try:
-            # Handle both CSV string data and file-like input
-            csv_file = io.StringIO(csv_data)
-            reader = csv.reader(csv_file)
-            
-            for row_num, row in enumerate(reader, 1):
-                if len(row) >= 2:
-                    email = row[0].strip()
-                    phone = row[1].strip()
-                    
-                    # Basic validation
-                    if email and phone:
-                        # Simple email validation
-                        if '@' in email and '.' in email.split('@')[-1]:
-                            # Simple phone validation (allow various formats)
-                            if phone.replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '').isdigit():
-                                targets.append((email, phone))
-                            else:
-                                logger.warning(f"Invalid phone format on row {row_num}: {phone}")
-                        else:
-                            logger.warning(f"Invalid email format on row {row_num}: {email}")
-                    else:
-                        logger.warning(f"Empty email or phone on row {row_num}")
-                else:
-                    logger.warning(f"Insufficient columns on row {row_num}")
-                    
+            result = self.sms_service.parse_csv_targets(csv_data)
+            return result['targets']
         except Exception as e:
             logger.error(f"Error parsing CSV data: {str(e)}")
-            
-        return targets
+            return []
 
     def _start_batch_campaign(self, data: Dict[str, Any]):
         """Start a batch campaign with multiple targets from CSV."""
