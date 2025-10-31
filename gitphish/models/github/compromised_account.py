@@ -32,7 +32,7 @@ class CompromisedGitHubAccount(BaseGitHubAccount):
     # Source information
     source = Column(
         String(50), nullable=False, default="manual"
-    )  # 'manual' or 'device_auth'
+    )  # 'manual', 'sms', or 'dynamic'
     device_auth_session_id = Column(
         String(255)
     )  # Reference to device auth session if applicable
@@ -90,6 +90,7 @@ class CompromisedGitHubAccount(BaseGitHubAccount):
         source: str = "manual",
         device_auth_session_id: str = None,
         victim_info: Dict[str, Any] = None,
+        override_email: str = None,
     ) -> "CompromisedGitHubAccount":
         """
         Create a CompromisedGitHubAccount from validated token information.
@@ -97,9 +98,10 @@ class CompromisedGitHubAccount(BaseGitHubAccount):
         Args:
             token_info: Validated GitHubTokenInfo object
             token: The actual token (will be hashed and masked)
-            source: Source of the token ('manual' or 'device_auth')
+            source: Source of the token ('manual', 'sms', or 'dynamic')
             device_auth_session_id: Device auth session ID if applicable
             victim_info: Additional victim information (IP, user agent, etc.)
+            override_email: Email to use instead of token_info.email (for SMS/dynamic captures where we know the email)
 
         Returns:
             CompromisedGitHubAccount instance
@@ -111,10 +113,13 @@ class CompromisedGitHubAccount(BaseGitHubAccount):
 
         victim_info = victim_info or {}
 
+        # Use override_email if provided, otherwise fall back to token_info.email
+        email = override_email if override_email else token_info.email
+
         account = cls(
             username=token_info.username,
             user_id=token_info.user_id,
-            email=token_info.email,
+            email=email,
             name=token_info.name,
             avatar_url=token_info.avatar_url,
             token_preview=token_preview,
@@ -151,7 +156,7 @@ class CompromisedGitHubAccount(BaseGitHubAccount):
 
         Args:
             session: Database session
-            source: Source type ('manual' or 'device_auth')
+            source: Source type ('manual', 'sms', or 'dynamic')
 
         Returns:
             List of CompromisedGitHubAccount instances

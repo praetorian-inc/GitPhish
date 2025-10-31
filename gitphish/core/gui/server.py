@@ -90,7 +90,7 @@ class GitPhishGuiServer:
         @self.app.route("/deploy")
         def deploy_management():
             """Deploy management page - combines full deployment functionality."""
-            return render_template("deploy_management.html")
+            return render_template("deployments_management.html")
 
         @self.app.route("/auth")
         def auth_server():
@@ -121,7 +121,7 @@ class GitPhishGuiServer:
         def github_pages():
             """GitHub Pages deployment management page."""
             deployments = self.deployment_api._get_deployment_status_from_db()
-            return render_template("github_pages.html", deployments=deployments)
+            return render_template("deployments_management.html", deployments=deployments)
 
         @self.app.route("/github-accounts")
         def github_accounts():

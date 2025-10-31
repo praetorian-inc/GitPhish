@@ -2,7 +2,7 @@ import requests
 import logging
 import threading
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 from urllib.parse import urljoin
 from gitphish.models.auth_attempts.auth import DeviceAuthResult
 from gitphish.config.auth import GitHubAuthConfig
@@ -65,9 +65,24 @@ class GitHubDeviceAuth:
         return results
 
     def poll_for_token(
-        self, device_code: str, interval: int, email: str
+        self,
+        device_code: str,
+        interval: int,
+        email: str,
+        should_continue_callback: Optional[Callable[[], bool]] = None
     ) -> Optional[str]:
-        """Poll for the access token with email tracking."""
+        """Poll for the access token with email tracking.
+
+        Args:
+            device_code: GitHub device code from device flow
+            interval: Polling interval in seconds
+            email: Email address for tracking
+            should_continue_callback: Optional callback to check if polling should continue.
+                                     If returns False, polling stops and returns None.
+
+        Returns:
+            Access token if successful, None otherwise
+        """
         poll_params = {
             "client_id": self.config.client_id,
             "device_code": device_code,
@@ -79,6 +94,10 @@ class GitHubDeviceAuth:
         start_time = time.time()
 
         while elapsed < self.config.timeout:
+            # Check if we should continue polling
+            if should_continue_callback and not should_continue_callback():
+                logger.info(f"Polling stopped by callback for {email}")
+                return None
             try:
                 response = self._make_request(
                     "/login/oauth/access_token", data=poll_params

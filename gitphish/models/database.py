@@ -11,7 +11,7 @@ from typing import Optional
 from contextlib import contextmanager
 from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool
 from gitphish.models.base import Base
 
 logger = logging.getLogger(__name__)
@@ -40,10 +40,12 @@ class DatabaseManager:
         # Create engine with appropriate settings
         if database_url.startswith("sqlite"):
             # SQLite-specific configuration
+            # Use NullPool to create a new connection for each checkout
+            # This prevents thread conflicts when multiple threads query simultaneously
             self.engine = create_engine(
                 database_url,
                 echo=echo,
-                poolclass=StaticPool,
+                poolclass=NullPool,
                 connect_args={"check_same_thread": False, "timeout": 30},
             )
 

