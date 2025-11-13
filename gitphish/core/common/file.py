@@ -70,6 +70,34 @@ class TokenStorageManager:
         return filename
 
     @staticmethod
+    def save_github_token(
+        token: str, 
+        email: Optional[str] = None, 
+        user_code: Optional[str] = None,
+        device_code: Optional[str] = None
+    ) -> str:
+        """
+        Save a GitHub token in the format expected by SMS campaigns API.
+        Returns the filename.
+        """
+        token_data = {
+            "access_token": token,
+            "email": email or "unknown",
+            "user_code": user_code,
+            "device_code": device_code,
+            "timestamp": time.time(),
+            "captured_at": datetime.now().isoformat()
+        }
+        
+        # Create filename in format expected by API: {email}.github_token.json
+        filename = f"{email or 'unknown'}.github_token.json"
+        
+        with open(filename, "w") as f:
+            json.dump(token_data, f, indent=2)
+        TokenStorageManager._set_secure_permissions(filename)
+        return filename
+
+    @staticmethod
     def _set_secure_permissions(filepath: str):
         try:
             os.chmod(filepath, 0o600)

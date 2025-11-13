@@ -277,4 +277,7 @@ fake_*
 
 # Test data that might contain real info
 test_data_real*
-real_test* 
+real_test*
+
+# Test CSV files
+*test*.csv

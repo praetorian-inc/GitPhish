@@ -83,10 +83,16 @@
                         <small class="text-muted">Valid Tokens</small>
                     </div>
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <div class="stats-card text-center">
-                        <h3 class="text-warning mb-1" id="deviceAuthAccounts">0</h3>
-                        <small class="text-muted">From Device Auth</small>
+                        <h3 class="text-warning mb-1" id="smsAccounts">0</h3>
+                        <small class="text-muted">From SMS</small>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="stats-card text-center">
+                        <h3 class="text-primary mb-1" id="dynamicAccounts">0</h3>
+                        <small class="text-muted">From Dynamic</small>
                     </div>
                 </div>
                 <div class="col-md-3">
@@ -112,9 +118,15 @@
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="device-auth-tab" data-bs-toggle="tab" data-bs-target="#device-auth" 
-                            type="button" role="tab" onclick="filterAccounts('device_auth')">
-                        <i class="fas fa-mobile-alt me-2"></i>Device Auth
+                    <button class="nav-link" id="sms-tab" data-bs-toggle="tab" data-bs-target="#sms"
+                            type="button" role="tab" onclick="filterAccounts('sms')">
+                        <i class="fas fa-sms me-2"></i>SMS
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="dynamic-tab" data-bs-toggle="tab" data-bs-target="#dynamic"
+                            type="button" role="tab" onclick="filterAccounts('dynamic')">
+                        <i class="fas fa-mobile-alt me-2"></i>Dynamic
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
@@ -279,7 +291,8 @@ async function loadStatistics() {
             const stats = await response.json();
             document.getElementById('totalAccounts').textContent = stats.total_accounts;
             document.getElementById('validAccounts').textContent = stats.valid_accounts;
-            document.getElementById('deviceAuthAccounts').textContent = stats.device_auth_accounts;
+            document.getElementById('smsAccounts').textContent = stats.sms_accounts;
+            document.getElementById('dynamicAccounts').textContent = stats.dynamic_accounts;
             document.getElementById('analyzedAccounts').textContent = stats.analyzed_accounts;
         }
     } catch (error) {
@@ -301,8 +314,10 @@ function renderAccounts() {
     // Apply filter
     if (currentFilter === 'manual') {
         filteredAccounts = compromisedAccounts.filter(acc => acc.source === 'manual');
-    } else if (currentFilter === 'device_auth') {
-        filteredAccounts = compromisedAccounts.filter(acc => acc.source === 'device_auth');
+    } else if (currentFilter === 'sms') {
+        filteredAccounts = compromisedAccounts.filter(acc => acc.source === 'sms');
+    } else if (currentFilter === 'dynamic') {
+        filteredAccounts = compromisedAccounts.filter(acc => acc.source === 'dynamic');
     } else if (currentFilter === 'unanalyzed') {
         filteredAccounts = compromisedAccounts.filter(acc => !acc.is_analyzed);
     }
@@ -360,9 +375,21 @@ function renderAccounts() {
                     </div>
                     
                     <div class="mb-2">
-                        <span class="badge source-badge ${account.source === 'device_auth' ? 'bg-warning' : 'bg-info'}">
-                            <i class="fas ${account.source === 'device_auth' ? 'fa-mobile-alt' : 'fa-hand-paper'} me-1"></i>
-                            ${account.source === 'device_auth' ? 'Device Auth' : 'Manual'}
+                        <span class="badge source-badge ${
+                            account.source === 'sms' ? 'bg-warning' :
+                            account.source === 'dynamic' ? 'bg-primary' :
+                            'bg-info'
+                        }">
+                            <i class="fas ${
+                                account.source === 'sms' ? 'fa-sms' :
+                                account.source === 'dynamic' ? 'fa-mobile-alt' :
+                                'fa-hand-paper'
+                            } me-1"></i>
+                            ${
+                                account.source === 'sms' ? 'SMS' :
+                                account.source === 'dynamic' ? 'Dynamic' :
+                                'Manual'
+                            }
                         </span>
                         <span class="badge ${account.is_valid ? 'bg-success' : 'bg-danger'}">
                             <i class="fas ${account.is_valid ? 'fa-check' : 'fa-times'} me-1"></i>
